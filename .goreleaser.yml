@@ -6,7 +6,7 @@ git:
 
 builds:
   - id: protoc-gen-connectview
-    main: ./cmd/connectview
+    main: ./cmd/protoc-gen-connectview
     binary: protoc-gen-connectview
     env:
       - CGO_ENABLED=0
@@ -19,7 +19,7 @@ builds:
       - arm64
 
   - id: connectview
-    main: ./cmd/connectview
+    main: ./cmd/protoc-gen-connectview
     binary: connectview
     env:
       - CGO_ENABLED=0
