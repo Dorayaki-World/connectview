@@ -396,7 +396,7 @@
 
   function renderFieldTree(fields, depth) {
     var container = el("div", {
-      className: "field-tree" + (depth > 0 ? " field-tree--nested" : ""),
+      className: depth > 0 ? "field-children" : "field-tree",
     });
 
     // Group fields by oneof
@@ -412,26 +412,26 @@
       }
     });
 
-    fields.forEach(function (field, index) {
-      var isLast = index === fields.length - 1;
-
+    fields.forEach(function (field) {
       // Oneof grouping
       if (field.oneofName && field.oneofName !== "") {
         if (rendered[field.oneofName]) return;
         rendered[field.oneofName] = true;
         container.appendChild(
-          renderOneofGroup(field.oneofName, oneofGroups[field.oneofName], depth, isLast)
+          renderOneofGroup(field.oneofName, oneofGroups[field.oneofName], depth)
         );
         return;
       }
 
-      container.appendChild(renderFieldRow(field, depth, isLast));
+      var node = el("div", { className: "field-node" });
+      renderFieldIntoNode(node, field, depth);
+      container.appendChild(node);
     });
 
     return container;
   }
 
-  function renderOneofGroup(name, fields, depth, isLast) {
+  function renderOneofGroup(name, fields, depth) {
     var group = el("div", { className: "oneof-group" });
 
     var header = el("div", { className: "oneof-header" });
@@ -444,21 +444,18 @@
     group.appendChild(header);
 
     var body = el("div", { className: "oneof-body" });
-    fields.forEach(function (field, idx) {
-      body.appendChild(renderFieldRow(field, depth + 1, idx === fields.length - 1));
+    fields.forEach(function (field) {
+      var node = el("div", { className: "field-node" });
+      renderFieldIntoNode(node, field, depth + 1);
+      body.appendChild(node);
     });
     group.appendChild(body);
 
     return group;
   }
 
-  function renderFieldRow(field, depth, isLast) {
+  function renderFieldIntoNode(node, field, depth) {
     var row = el("div", { className: "field-row" });
-
-    // Tree connector
-    var connector = el("span", { className: "field-connector" });
-    connector.textContent = isLast ? "\u2514\u2500 " : "\u251C\u2500 ";
-    row.appendChild(connector);
 
     // Type name
     var typeName = fieldTypeName(field);
@@ -486,13 +483,14 @@
       );
     }
 
+    node.appendChild(row);
+
     // Recursive field
     if (field.isRecursive) {
-      var recursiveMarker = el("span", {
+      row.appendChild(el("span", {
         className: "field-recursive",
         textContent: " \u21BB [recursive]",
-      });
-      row.appendChild(recursiveMarker);
+      }));
 
       // Expand button for one-level expansion
       if (field.resolvedMessage && field.resolvedMessage.fields) {
@@ -501,24 +499,19 @@
           textContent: "expand",
           onClick: function (e) {
             e.stopPropagation();
-            var existingNested = row.parentNode.querySelector(
-              '.field-tree--expanded[data-field="' + field.name + '"]'
-            );
-            if (existingNested) {
-              existingNested.remove();
+            var existingChildren = node.querySelector(".field-children");
+            if (existingChildren) {
+              existingChildren.remove();
               expandBtn.textContent = "expand";
             } else {
-              var nested = renderFieldTree(field.resolvedMessage.fields, depth + 1);
-              nested.classList.add("field-tree--expanded");
-              nested.setAttribute("data-field", field.name);
-              row.parentNode.insertBefore(nested, row.nextSibling);
+              node.appendChild(renderFieldTree(field.resolvedMessage.fields, depth + 1));
               expandBtn.textContent = "collapse";
             }
           },
         });
         row.appendChild(expandBtn);
       }
-      return row;
+      return;
     }
 
     // Nested message fields (non-recursive)
@@ -529,16 +522,31 @@
       field.resolvedMessage.fields.length > 0 &&
       !field.isMap
     ) {
-      var wrapper = el("div", { className: "field-row-wrapper" });
-      wrapper.appendChild(row);
-      wrapper.appendChild(renderFieldTree(field.resolvedMessage.fields, depth + 1));
-      return wrapper;
+      var toggle = el("button", { className: "field-toggle", "aria-expanded": "true" });
+      toggle.innerHTML = "\u25BC";
+      row.insertBefore(toggle, row.firstChild);
+
+      var children = renderFieldTree(field.resolvedMessage.fields, depth + 1);
+      node.appendChild(children);
+
+      toggle.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var expanded = toggle.getAttribute("aria-expanded") === "true";
+        if (expanded) {
+          children.style.display = "none";
+          toggle.innerHTML = "\u25B6";
+          toggle.setAttribute("aria-expanded", "false");
+        } else {
+          children.style.display = "";
+          toggle.innerHTML = "\u25BC";
+          toggle.setAttribute("aria-expanded", "true");
+        }
+      });
+      return;
     }
 
     // Enum values
     if (field.type === FIELD_TYPE.ENUM && field.resolvedEnum && field.resolvedEnum.values) {
-      var wrapper = el("div", { className: "field-row-wrapper" });
-      wrapper.appendChild(row);
       var enumVals = el("div", { className: "enum-values" });
       field.resolvedEnum.values.forEach(function (v) {
         var valRow = el("span", {
@@ -552,11 +560,8 @@
         }
         enumVals.appendChild(valRow);
       });
-      wrapper.appendChild(enumVals);
-      return wrapper;
+      node.appendChild(enumVals);
     }
-
-    return row;
   }
 
   // ---------------------------------------------------------------------------

@@ -360,43 +360,10 @@ pre,
   padding: 8px 0;
 }
 
-.field-node {
-  position: relative;
-  padding-left: 20px;
-}
-
-.field-node::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 6px;
-  bottom: 0;
-  width: 1px;
-  background: #e1e4e8;
-}
-
-.field-node:last-child::before {
-  bottom: 50%;
-}
-
-.field-node::after {
-  content: "";
-  position: absolute;
-  top: 12px;
-  left: 6px;
-  width: 10px;
-  height: 1px;
-  background: #e1e4e8;
-}
-
-/* Top-level fields have no tree lines */
-.field-tree > .field-node::before,
-.field-tree > .field-node::after {
-  display: none;
-}
-
-.field-tree > .field-node {
-  padding-left: 0;
+.field-children {
+  padding-left: 16px;
+  margin-left: 8px;
+  border-left: 1px dashed #d8dee4;
 }
 
 .field-row {
@@ -452,6 +419,46 @@ pre,
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
 
+.field-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 12px;
+  color: #57606a;
+  background: none;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.1s, background 0.1s;
+}
+
+.field-toggle:hover {
+  color: #24292e;
+  background: #e1e4e8;
+}
+
+.field-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+  color: #0366d6;
+  background: none;
+  border: 1px solid #d1d5da;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.field-expand-btn:hover {
+  background: #f1f8ff;
+}
+
 /* --- Oneof Group -------------------------------------------- */
 
 .oneof-group {
@@ -461,13 +468,25 @@ pre,
   border-radius: 2px;
 }
 
+.oneof-header {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 0;
+}
+
 .oneof-label {
   font-size: 11px;
   font-weight: 700;
   color: #7b1fa2;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  margin-bottom: 2px;
+}
+
+.oneof-name {
+  font-weight: 600;
+  color: #7b1fa2;
+  font-size: 12px;
 }
 
 /* --- Enum --------------------------------------------------- */
@@ -636,33 +655,6 @@ pre,
   border-radius: 4px;
   font-size: 12px;
   overflow-x: auto;
-}
-
-/* --- Nested Message Toggle ---------------------------------- */
-
-.nested-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: #0366d6;
-  cursor: pointer;
-  border: none;
-  background: none;
-  padding: 0;
-  font-family: inherit;
-}
-
-.nested-toggle:hover {
-  text-decoration: underline;
-}
-
-.nested-fields {
-  margin-left: 4px;
-}
-
-.nested-fields[data-collapsed="true"] {
-  display: none;
 }
 
 /* --- Scrollbar ---------------------------------------------- */
