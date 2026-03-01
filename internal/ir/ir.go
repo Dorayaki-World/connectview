@@ -1,12 +1,12 @@
+// internal/ir/ir.go
 package ir
 
-// Root は全体のIR。Rendererに渡す最上位の構造体
+// Root is the top-level IR structure passed to the renderer.
 type Root struct {
 	Files    []*File
 	Services []*Service
-	// FQN（"."始まり）→ Message のルックアップテーブル
-	Messages map[string]*Message
-	Enums    map[string]*Enum
+	Messages map[string]*Message // FQN ("." prefix) → Message lookup
+	Enums    map[string]*Enum    // FQN ("." prefix) → Enum lookup
 }
 
 type File struct {
@@ -15,16 +15,16 @@ type File struct {
 }
 
 type Service struct {
-	Name            string
-	FullName        string
-	File            string
+	Name            string // "GreetService"
+	FullName        string // "connectrpc.greet.v1.GreetService"
+	File            string // "greet/v1/greet.proto"
 	Comment         string
 	RPCs            []*RPC
-	ConnectBasePath string // "/{FullName}/"
+	ConnectBasePath string // "/connectrpc.greet.v1.GreetService/"
 }
 
 type RPC struct {
-	Name           string
+	Name           string // "Greet"
 	Comment        string
 	ConnectPath    string // "/connectrpc.greet.v1.GreetService/Greet"
 	HTTPMethod     string // "POST" or "GET"
@@ -35,35 +35,36 @@ type RPC struct {
 }
 
 type MessageRef struct {
-	TypeName string   // FQN（"."始まり）
-	Resolved *Message // Resolverが設定
+	TypeName string   // FQN e.g. ".connectrpc.greet.v1.GreetRequest"
+	Resolved *Message // populated by resolver
 }
 
 type Message struct {
-	Name           string
-	FullName       string
+	Name           string // "GreetRequest"
+	FullName       string // ".connectrpc.greet.v1.GreetRequest"
 	Comment        string
 	Fields         []*Field
 	NestedMessages []*Message
 	NestedEnums    []*Enum
+	IsMapEntry     bool // synthetic map entry message
 }
 
 type Field struct {
 	Name             string
 	Number           int32
 	Type             FieldType
-	TypeName         string // MESSAGE/ENUMの場合のFQN（"."始まり）
+	TypeName         string // FQN for MESSAGE/ENUM types
 	Label            FieldLabel
 	Comment          string
-	OneofName        string
-	IsOptional       bool // proto3 optional
+	IsOptional       bool   // proto3 optional keyword
+	OneofName        string // non-empty if part of a real oneof
 	IsMap            bool
 	MapKeyType       FieldType
 	MapValueType     FieldType
-	MapValueTypeName string // VALUE が MESSAGE/ENUM の場合のFQN
+	MapValueTypeName string // FQN if map value is MESSAGE/ENUM
 	ResolvedMessage  *Message
 	ResolvedEnum     *Enum
-	IsRecursive      bool
+	IsRecursive      bool // set by resolver
 }
 
 type FieldType int32
@@ -88,6 +89,48 @@ const (
 	FieldTypeSint64   FieldType = 18
 )
 
+// String returns the human-readable name of the field type.
+func (ft FieldType) String() string {
+	switch ft {
+	case FieldTypeDouble:
+		return "double"
+	case FieldTypeFloat:
+		return "float"
+	case FieldTypeInt64:
+		return "int64"
+	case FieldTypeUint64:
+		return "uint64"
+	case FieldTypeInt32:
+		return "int32"
+	case FieldTypeFixed64:
+		return "fixed64"
+	case FieldTypeFixed32:
+		return "fixed32"
+	case FieldTypeBool:
+		return "bool"
+	case FieldTypeString:
+		return "string"
+	case FieldTypeMessage:
+		return "message"
+	case FieldTypeBytes:
+		return "bytes"
+	case FieldTypeUint32:
+		return "uint32"
+	case FieldTypeEnum:
+		return "enum"
+	case FieldTypeSfixed32:
+		return "sfixed32"
+	case FieldTypeSfixed64:
+		return "sfixed64"
+	case FieldTypeSint32:
+		return "sint32"
+	case FieldTypeSint64:
+		return "sint64"
+	default:
+		return "unknown"
+	}
+}
+
 type FieldLabel int32
 
 const (
@@ -97,14 +140,14 @@ const (
 )
 
 type Enum struct {
-	Name     string
-	FullName string
+	Name     string // "UserStatus"
+	FullName string // ".user.v1.UserStatus"
 	Comment  string
 	Values   []*EnumValue
 }
 
 type EnumValue struct {
-	Name    string
-	Number  int32
+	Name    string // "USER_STATUS_ACTIVE"
+	Number  int32  // 1
 	Comment string
 }
