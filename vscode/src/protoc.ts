@@ -65,18 +65,29 @@ async function extractImports(filePath: string): Promise<string[]> {
   }
 }
 
+type ImportDetectionResult = {
+  /** Additional -I paths for external dependencies (outside protoRoot). */
+  includes: string[];
+  /** If the real proto root is a subdirectory of the configured protoRoot, this is it. */
+  effectiveRoot: string | null;
+};
+
 /**
  * Scan proto files for import statements and compute additional -I paths
  * needed to resolve imports that aren't found under the existing include paths.
  *
  * For each unresolved import (e.g. "user/v1/user.proto"), searches the workspace
  * for a matching file and back-computes the required -I directory.
+ *
+ * When the computed -I is a subdirectory of protoRoot, it means the real proto
+ * root is that subdirectory. Instead of adding a conflicting -I, we return it
+ * as `effectiveRoot` so the caller can switch to it (avoiding duplicate file errors).
  */
 async function detectImportPaths(
   config: Config,
   protoFiles: string[],
   existingIncludes: string[]
-): Promise<string[]> {
+): Promise<ImportDetectionResult> {
   const allIncludes = [config.protoRoot, ...existingIncludes, ...config.includePaths];
 
   // Collect all unresolved import paths.
@@ -103,12 +114,14 @@ async function detectImportPaths(
     }
   }
 
-  if (unresolvedImports.size === 0) return [];
+  if (unresolvedImports.size === 0) return { includes: [], effectiveRoot: null };
 
   // Build an index of all proto files in the workspace (relative to workspace root).
   const wsProtos = await findAllProtoFiles(config.workspaceRoot);
 
-  const computedIncludes = new Set<string>();
+  const externalIncludes = new Set<string>();
+  let effectiveRoot: string | null = null;
+
   for (const imp of unresolvedImports) {
     // Find a workspace file whose path ends with the import path.
     for (const wsFile of wsProtos) {
@@ -116,16 +129,24 @@ async function detectImportPaths(
         // Back-compute: /workspace/src/proto/user/v1/user.proto - user/v1/user.proto
         //             = /workspace/src/proto/
         const absWsFile = path.join(config.workspaceRoot, wsFile);
-        const includeDir = absWsFile.slice(0, absWsFile.length - imp.length);
-        if (includeDir && !allIncludes.includes(includeDir.replace(/\/$/, ""))) {
-          computedIncludes.add(includeDir.replace(/\/$/, ""));
+        const includeDir = absWsFile.slice(0, absWsFile.length - imp.length).replace(/\/$/, "");
+
+        if (!includeDir || allIncludes.includes(includeDir)) break;
+
+        // If the computed include is a subdirectory of protoRoot, it's the real root.
+        // Adding it as a separate -I would cause duplicate symbol errors.
+        const protoRootWithSep = config.protoRoot + path.sep;
+        if (includeDir.startsWith(protoRootWithSep) || includeDir === config.protoRoot) {
+          effectiveRoot = includeDir;
+        } else {
+          externalIncludes.add(includeDir);
         }
         break;
       }
     }
   }
 
-  return [...computedIncludes];
+  return { includes: [...externalIncludes], effectiveRoot };
 }
 
 /** Find all .proto files under a directory (including hidden/vendor dirs skipped by findProtoFiles). */
@@ -156,7 +177,7 @@ async function findAllProtoFiles(dir: string): Promise<string[]> {
 
 /** Run protoc + protoc-gen-connectview to produce HTML. */
 export async function compile(config: Config): Promise<CompileResult> {
-  const protoFiles = await findProtoFiles(config.protoRoot);
+  let protoFiles = await findProtoFiles(config.protoRoot);
   if (protoFiles.length === 0) {
     return { ok: false, error: "No .proto files found in " + config.protoRoot };
   }
@@ -170,12 +191,21 @@ export async function compile(config: Config): Promise<CompileResult> {
 
   try {
     const autoIncludes = await detectIncludePaths(config);
-    const importIncludes = await detectImportPaths(config, protoFiles, autoIncludes);
+    const { includes: importIncludes, effectiveRoot } =
+      await detectImportPaths(config, protoFiles, autoIncludes);
+
+    // If import detection found the real proto root is a subdirectory of
+    // the configured protoRoot, switch to it to avoid duplicate file errors.
+    let protoRoot = config.protoRoot;
+    if (effectiveRoot) {
+      protoRoot = effectiveRoot;
+      protoFiles = await findProtoFiles(protoRoot);
+    }
 
     const args: string[] = [
       `--plugin=protoc-gen-connectview=${pluginPath}`,
       `--connectview_out=${tmpDir}`,
-      `-I${config.protoRoot}`,
+      `-I${protoRoot}`,
       ...autoIncludes.map((p) => `-I${p}`),
       ...importIncludes.map((p) => `-I${p}`),
       ...config.includePaths.map((p) => `-I${p}`),
