@@ -1,5 +1,9 @@
 version: 2
 
+git:
+  ignore_tags:
+    - "vscode/*"
+
 builds:
   - id: protoc-gen-connectview
     main: ./cmd/connectview
