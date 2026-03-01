@@ -17,7 +17,7 @@ func buildBinary(t *testing.T) string {
 	t.Helper()
 	tmpDir := t.TempDir()
 	binaryPath := filepath.Join(tmpDir, "protoc-gen-connectview")
-	cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/connectview")
+	cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/protoc-gen-connectview")
 	cmd.Dir = projectRoot()
 	out, err := cmd.CombinedOutput()
 	if err != nil {

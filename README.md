@@ -13,10 +13,7 @@ Interactive API explorer for [ConnectRPC](https://connectrpc.com) services, gene
 ## Install
 
 ```sh
-go install github.com/Dorayaki-World/connectview/cmd/connectview@latest
-
-# protoc needs the binary named protoc-gen-connectview
-cp "$(go env GOPATH)/bin/connectview" "$(go env GOPATH)/bin/protoc-gen-connectview"
+go install github.com/Dorayaki-World/connectview/cmd/protoc-gen-connectview@latest
 ```
 
 ## Quick Start — Generate Mode
@@ -37,7 +34,7 @@ Then open `index.html` in your browser.
 Point connectview at your proto directory and a running ConnectRPC server:
 
 ```sh
-connectview serve \
+protoc-gen-connectview serve \
   --proto ./proto \
   --target http://localhost:8080
 ```

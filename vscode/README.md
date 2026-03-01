@@ -12,8 +12,7 @@ Preview [ConnectRPC](https://connectrpc.com) service definitions with a Swagger 
 brew install protobuf
 
 # protoc-gen-connectview
-go install github.com/Dorayaki-World/connectview/cmd/connectview@latest
-cp "$(go env GOPATH)/bin/connectview" "$(go env GOPATH)/bin/protoc-gen-connectview"
+go install github.com/Dorayaki-World/connectview/cmd/protoc-gen-connectview@latest
 ```
 
 ## Usage
