@@ -15,15 +15,16 @@ func New(root *ir.Root) *Resolver {
 	return &Resolver{root: root}
 }
 
-// Resolve resolves all MessageRef.Resolved pointers and marks recursive fields.
+// Resolve walks all RPCs, resolves MessageRef.Resolved pointers,
+// resolves Field.ResolvedMessage/ResolvedEnum, and marks IsRecursive.
 func (r *Resolver) Resolve() error {
 	for _, svc := range r.root.Services {
 		for _, rpc := range svc.RPCs {
 			if err := r.resolveMessageRef(rpc.Request, nil); err != nil {
-				return err
+				return fmt.Errorf("resolve request for %s: %w", rpc.Name, err)
 			}
 			if err := r.resolveMessageRef(rpc.Response, nil); err != nil {
-				return err
+				return fmt.Errorf("resolve response for %s: %w", rpc.Name, err)
 			}
 		}
 	}
@@ -48,12 +49,7 @@ func (r *Resolver) resolveMessageRef(ref *ir.MessageRef, visitedInPath map[strin
 	}
 
 	for _, field := range msg.Fields {
-		// Skip map fields — their TypeName points to a synthetic MapEntry
-		// that is not registered in root.Messages.
-		if field.IsMap {
-			continue
-		}
-		if field.Type == ir.FieldTypeMessage {
+		if field.Type == ir.FieldTypeMessage && field.TypeName != "" && !field.IsMap {
 			if visitedInPath[field.TypeName] {
 				// This FQN already exists on the current path -> recursive reference
 				field.IsRecursive = true
