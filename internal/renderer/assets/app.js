@@ -1257,6 +1257,9 @@
   // ---------------------------------------------------------------------------
 
   function getBaseURL() {
+    if (window.__CONNECTVIEW_SERVE_MODE__) {
+      return "/proxy";
+    }
     var input = document.getElementById("base-url-input");
     var url = input ? input.value.trim() : "http://localhost:8080";
     // Remove trailing slash
@@ -1517,6 +1520,48 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Serve mode: SSE hot reload
+  // ---------------------------------------------------------------------------
+
+  function connectSSE() {
+    var es = new EventSource("/events");
+    es.onmessage = function(e) {
+      try {
+        var data = JSON.parse(e.data);
+        if (data.type === "schema-updated") {
+          reloadSchema();
+        }
+      } catch (err) {
+        // ignore parse errors
+      }
+    };
+    es.onerror = function() {
+      setTimeout(function() {
+        es.close();
+        connectSSE();
+      }, 3000);
+    };
+  }
+
+  function reloadSchema() {
+    fetch("/schema.json")
+      .then(function(resp) { return resp.json(); })
+      .then(function(schema) {
+        window.__CONNECTVIEW_SCHEMA__ = schema;
+        var sidebar = document.getElementById("sidebar");
+        var mainContent = document.getElementById("main-content");
+        if (sidebar) sidebar.innerHTML = "";
+        if (mainContent) mainContent.innerHTML = "";
+        renderSidebar(schema, sidebar);
+        renderMain(schema, mainContent);
+        setupFilter(schema, sidebar);
+      })
+      .catch(function(err) {
+        console.error("Failed to reload schema:", err);
+      });
+  }
+
+  // ---------------------------------------------------------------------------
   // Initialization
   // ---------------------------------------------------------------------------
 
@@ -1538,6 +1583,10 @@
     renderSidebar(schema, sidebar);
     renderMain(schema, mainContent);
     setupFilter(schema, sidebar);
+
+    if (window.__CONNECTVIEW_SERVE_MODE__) {
+      connectSSE();
+    }
   }
 
   if (document.readyState === "loading") {

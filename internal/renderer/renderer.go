@@ -20,6 +20,7 @@ type templateData struct {
 	SchemaJSON template.JS
 	CSS        template.CSS
 	JS         template.JS
+	ServeMode  bool
 }
 
 // schemaJSON is the JSON-serializable representation of the IR.
@@ -90,8 +91,17 @@ type enumValueJSON struct {
 	Comment string `json:"comment"`
 }
 
-// Render produces a self-contained HTML string from the resolved IR.
+// Render produces a self-contained HTML string (generate mode).
 func (r *Renderer) Render(root *ir.Root) (string, error) {
+	return r.renderHTML(root, false)
+}
+
+// RenderServeMode produces HTML with serve mode flag enabled.
+func (r *Renderer) RenderServeMode(root *ir.Root) (string, error) {
+	return r.renderHTML(root, true)
+}
+
+func (r *Renderer) renderHTML(root *ir.Root, serveMode bool) (string, error) {
 	schema := buildSchema(root)
 
 	schemaBytes, err := json.Marshal(schema)
@@ -123,6 +133,7 @@ func (r *Renderer) Render(root *ir.Root) (string, error) {
 		SchemaJSON: template.JS(schemaBytes),
 		CSS:        template.CSS(css),
 		JS:         template.JS(js),
+		ServeMode:  serveMode,
 	}
 
 	var buf bytes.Buffer
@@ -131,6 +142,11 @@ func (r *Renderer) Render(root *ir.Root) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+// BuildSchemaJSON builds and returns the schema as a JSON-serializable value.
+func BuildSchemaJSON(root *ir.Root) any {
+	return buildSchema(root)
 }
 
 func buildSchema(root *ir.Root) *schemaJSON {
