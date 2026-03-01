@@ -1,0 +1,50 @@
+version: 2
+
+builds:
+  - id: protoc-gen-connectview
+    main: ./cmd/connectview
+    binary: protoc-gen-connectview
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+  - id: connectview
+    main: ./cmd/connectview
+    binary: connectview
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: protoc-gen-connectview
+    builds:
+      - protoc-gen-connectview
+    name_template: "protoc-gen-connectview_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  - id: connectview
+    builds:
+      - connectview
+    name_template: "connectview_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^ci:"
