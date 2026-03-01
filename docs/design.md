@@ -310,20 +310,13 @@ OUT-OF-SCOPE:
 
 ```
 cmd/connectview/
-  main.go             エントリポイント。サブコマンドのルーティング
-  cmd_generate.go     generateサブコマンド（protoc plugin I/O）
-  cmd_serve.go        serveサブコマンド（HTTPサーバー起動）
-
-internal/plugin/
-  plugin.go           CodeGeneratorRequest/Response のI/O処理
+  main.go             エントリポイント。protogen.Options{}.Run() で起動
 
 internal/parser/
-  parser.go           FileDescriptorProto → IR変換
-  comment.go          SourceCodeInfo からコメントを抽出する
+  parser.go           protogen.Plugin → IR変換（コメント抽出・map検出・optional検出含む）
 
 internal/resolver/
-  resolver.go         cross-fileメッセージ・enum参照の解決
-  recursive.go        再帰参照の検出と制御
+  resolver.go         cross-fileメッセージ・enum参照の解決、再帰参照の検出
 
 internal/renderer/
   renderer.go         ResolvedIR → HTMLテンプレート適用
@@ -334,32 +327,47 @@ internal/renderer/assets/
   style.css           スタイルシート
   app.js              フォーム生成・リクエスト送信ロジック
 
-internal/server/
+internal/server/         （serveモードで実装予定）
   server.go           serveモードのHTTPサーバー
   proxy.go            /proxy エンドポイントの実装
   watcher.go          protoファイルのFileWatcher
 ```
 
+※ `internal/plugin/` と `internal/parser/comment.go` は不要。
+  `google.golang.org/protobuf/compiler/protogen` が CodeGeneratorRequest/Response の
+  I/O処理、SourceCodeInfoからのコメント抽出、map検出、proto3 optional検出を全て担う。
+
 ### 6.3 protoc plugin インターフェース
 
 ```go
-// internal/plugin/plugin.go
+// cmd/connectview/main.go
+// protogen を使用。stdin/stdout の処理は protogen が自動で行う。
 
-// protoc は stdin に CodeGeneratorRequest を書き込み、
-// plugin は stdout に CodeGeneratorResponse を書き込む
+func main() {
+    var flags flag.FlagSet
+    protogen.Options{
+        ParamFunc: flags.Set,
+    }.Run(func(plugin *protogen.Plugin) error {
+        plugin.SupportedFeatures = uint64(
+            pluginpb.CodeGeneratorResponse_FEATURE_PROTO3_OPTIONAL,
+        )
 
-func Run(generate func(*pluginpb.CodeGeneratorRequest) (*pluginpb.CodeGeneratorResponse, error)) {
-    // stdin 読み込み
-    input, err := io.ReadAll(os.Stdin)
-    // ...
-    var req pluginpb.CodeGeneratorRequest
-    proto.Unmarshal(input, &req)
-    // ...
-    resp, err := generate(&req)
-    // ...
-    // stdout 書き込み
-    output, _ := proto.Marshal(resp)
-    os.Stdout.Write(output)
+        root := parser.Parse(plugin)
+
+        r := resolver.New(root)
+        if err := r.Resolve(); err != nil {
+            return err
+        }
+
+        html, err := renderer.New().Render(root)
+        if err != nil {
+            return err
+        }
+
+        outFile := plugin.NewGeneratedFile("index.html", "")
+        _, err = outFile.Write([]byte(html))
+        return err
+    })
 }
 ```
 
@@ -427,6 +435,8 @@ type Message struct {
     // ネストされたメッセージ定義（Message内Messageの場合）
     NestedMessages []*Message
     NestedEnums    []*Enum
+    // synthetic map entry message
+    IsMapEntry bool
 }
 
 type Field struct {
@@ -437,8 +447,15 @@ type Field struct {
     TypeName string
     Label    FieldLabel
     Comment  string
-    // oneofグループ名（oneofに属する場合）
+    // proto3 optional キーワード
+    IsOptional bool
+    // oneofグループ名（real oneofに属する場合。synthetic oneofは含まない）
     OneofName string
+    // map<K,V> フィールドのサポート
+    IsMap            bool
+    MapKeyType       FieldType
+    MapValueType     FieldType
+    MapValueTypeName string // map value が MESSAGE/ENUM の場合の FQN
     // Resolverが解決した実体
     ResolvedMessage *Message
     ResolvedEnum    *Enum
@@ -494,39 +511,41 @@ type EnumValue struct {
 
 ```go
 // internal/parser/parser.go
+// protogen を使用。コメント抽出・map検出・optional検出は protogen が自動で行う。
 
-// FileDescriptorProto のServiceDescriptorProto → ir.Service
-func parseService(fd *descriptorpb.FileDescriptorProto, sd *descriptorpb.ServiceDescriptorProto) *ir.Service {
-    pkg := fd.GetPackage()
-    fullName := pkg + "." + sd.GetName()
+// Parse は protogen.Plugin のファイルを IR に変換する
+func Parse(plugin *protogen.Plugin) *ir.Root {
+    root := &ir.Root{
+        Messages: make(map[string]*ir.Message),
+        Enums:    make(map[string]*ir.Enum),
+    }
+    for _, f := range plugin.Files {
+        if !f.Generate {
+            continue
+        }
+        // messages, enums, services を変換
+    }
+    return root
+}
+
+// protogen.Service → ir.Service
+func parseService(svc *protogen.Service) *ir.Service {
+    fullName := string(svc.Desc.FullName())
     return &ir.Service{
-        Name:            sd.GetName(),
-        FullName:         fullName,
-        File:             fd.GetName(),
-        Comment:          extractComment(fd, serviceCommentPath(sd)),
-        RPCs:             parseRPCs(fd, sd, fullName),
+        Name:            string(svc.Desc.Name()),
+        FullName:        fullName,
+        File:            svc.Desc.ParentFile().Path(),
+        Comment:         cleanComment(string(svc.Comments.Leading)),
         ConnectBasePath: "/" + fullName + "/",
     }
 }
 
-// MethodDescriptorProto → ir.RPC
-func parseRPC(fd *descriptorpb.FileDescriptorProto, md *descriptorpb.MethodDescriptorProto, serviceFQN string) *ir.RPC {
-    httpMethod := "POST"
-    // idempotency_level = NO_SIDE_EFFECTS の場合はGET対応
-    if md.GetOptions().GetIdempotencyLevel() == descriptorpb.MethodOptions_NO_SIDE_EFFECTS {
-        httpMethod = "GET"
-    }
-    return &ir.RPC{
-        Name:            md.GetName(),
-        Comment:         extractComment(fd, rpcCommentPath(md)),
-        ConnectPath:     "/" + serviceFQN + "/" + md.GetName(),
-        HTTPMethod:      httpMethod,
-        Request:         &ir.MessageRef{TypeName: md.GetInputType()},   // FQN（"."始まり）
-        Response:        &ir.MessageRef{TypeName: md.GetOutputType()},
-        ClientStreaming: md.GetClientStreaming(),
-        ServerStreaming: md.GetServerStreaming(),
-    }
-}
+// protogen.Method → ir.RPC
+// idempotency_level は method.Desc.Options() から取得
+// コメントは method.Comments.Leading から取得（SourceCodeInfo パース不要）
+// map フィールドは field.Desc.IsMap() で検出
+// proto3 optional は field.Desc.HasOptionalKeyword() で検出
+// synthetic oneof は field.Oneof.Desc.IsSynthetic() で判別
 ```
 
 ### 7.3 Resolver の動作
@@ -1832,7 +1851,7 @@ func TestRenderer_ContainsEmbeddedSchema(t *testing.T) {
     }
 
     // JS側がschemaデータを参照するためのscriptタグが存在するか
-    if !strings.Contains(html, "window.__PROTOVIEW_SCHEMA__") {
+    if !strings.Contains(html, "window.__CONNECTVIEW_SCHEMA__") {
         t.Error("HTML does not contain embedded schema JSON")
     }
     if !strings.Contains(html, "GreetService") {
@@ -2004,7 +2023,7 @@ func TestE2E_GenerateHTML(t *testing.T) {
         {"response message name", "GreetResponse"},
         {"field name", "name"},
         {"service comment", "GreetService provides greeting functionality."},
-        {"embedded schema JSON", "window.__PROTOVIEW_SCHEMA__"},
+        {"embedded schema JSON", "window.__CONNECTVIEW_SCHEMA__"},
         {"no external CDN", "cdn."},  // CDN参照がないこと（negativeチェック）
     }
 
