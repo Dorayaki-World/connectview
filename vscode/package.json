@@ -2,7 +2,7 @@
   "name": "connectview",
   "displayName": "ConnectView",
   "description": "Preview ConnectRPC service definitions as interactive HTML documentation",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "dorayaki-world",
   "license": "MIT",
   "icon": "images/icon.png",
