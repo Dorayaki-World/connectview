@@ -2,7 +2,7 @@
   "name": "connectview",
   "displayName": "ConnectView",
   "description": "Preview ConnectRPC service definitions as interactive HTML documentation",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "dorayaki-world",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -14,11 +14,20 @@
   "bugs": {
     "url": "https://github.com/Dorayaki-World/connectview/issues"
   },
-  "keywords": ["protobuf", "connectrpc", "grpc", "proto", "api", "preview"],
+  "keywords": [
+    "protobuf",
+    "connectrpc",
+    "grpc",
+    "proto",
+    "api",
+    "preview"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Visualization"],
+  "categories": [
+    "Visualization"
+  ],
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
@@ -58,7 +67,9 @@
         },
         "connectview.includePaths": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Additional -I include paths for protoc"
         }
