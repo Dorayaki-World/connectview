@@ -153,7 +153,7 @@ pre,
   margin-bottom: 4px;
 }
 
-.sidebar-service {
+.sidebar-group-header {
   display: flex;
   align-items: center;
   padding: 6px 16px;
@@ -165,15 +165,19 @@ pre,
   transition: background 0.1s;
 }
 
-.sidebar-service:hover {
+.sidebar-group-header:hover {
   background: #f6f8fa;
 }
 
-.sidebar-service[aria-expanded="true"] .sidebar-chevron {
-  transform: rotate(90deg);
+.sidebar-group.collapsed .sidebar-rpc-list {
+  display: none;
 }
 
-.sidebar-chevron {
+.sidebar-group.collapsed .sidebar-arrow svg {
+  transform: rotate(-90deg);
+}
+
+.sidebar-arrow {
   display: inline-block;
   width: 16px;
   height: 16px;
@@ -187,11 +191,9 @@ pre,
   overflow: hidden;
 }
 
-.sidebar-rpc-list[data-collapsed="true"] {
-  display: none;
-}
+/* collapsed state handled via .sidebar-group.collapsed .sidebar-rpc-list above */
 
-.sidebar-rpc {
+.sidebar-rpc-item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -203,19 +205,19 @@ pre,
   border-left: 3px solid transparent;
 }
 
-.sidebar-rpc:hover {
+.sidebar-rpc-item:hover {
   background: #f6f8fa;
   color: #24292e;
 }
 
-.sidebar-rpc[data-active="true"] {
+.sidebar-rpc-item[data-active="true"] {
   background: #f1f8ff;
   border-left-color: #0366d6;
   color: #0366d6;
   font-weight: 600;
 }
 
-.sidebar-rpc-method {
+.sidebar-rpc-item .method-badge {
   display: inline-block;
   min-width: 36px;
   text-align: center;
@@ -224,26 +226,6 @@ pre,
   padding: 1px 4px;
   border-radius: 3px;
   text-transform: uppercase;
-  flex-shrink: 0;
-}
-
-.sidebar-rpc-method[data-method="POST"] {
-  background: #e3f2fd;
-  color: #1565c0;
-}
-
-.sidebar-rpc-method[data-method="GET"] {
-  background: #e8f5e9;
-  color: #2e7d32;
-}
-
-.sidebar-stream-badge {
-  font-size: 10px;
-  padding: 0 4px;
-  border-radius: 3px;
-  background: #fff3e0;
-  color: #e65100;
-  font-weight: 600;
   flex-shrink: 0;
 }
 
@@ -282,20 +264,20 @@ pre,
   margin-bottom: 4px;
 }
 
-.rpc-card-name {
+.rpc-name {
   font-size: 16px;
   font-weight: 700;
   color: #24292e;
 }
 
-.rpc-card-path {
+.rpc-path {
   font-size: 12px;
   color: #586069;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   word-break: break-all;
 }
 
-.rpc-card-comment {
+.rpc-comment {
   margin-top: 6px;
   font-size: 13px;
   color: #586069;
@@ -312,17 +294,17 @@ pre,
   flex-shrink: 0;
 }
 
-.method-badge[data-method="POST"] {
+.method-badge--post {
   background: #e3f2fd;
   color: #1565c0;
 }
 
-.method-badge[data-method="GET"] {
+.method-badge--get {
   background: #e8f5e9;
   color: #2e7d32;
 }
 
-.stream-badge {
+.streaming-badge {
   display: inline-block;
   font-size: 11px;
   font-weight: 600;
@@ -510,7 +492,12 @@ pre,
 /* --- Try It Panel ------------------------------------------- */
 
 .try-it-panel {
+  display: none;
   margin-top: 8px;
+}
+
+.try-it-panel.try-it-panel--open {
+  display: block;
 }
 
 .try-it-editor {

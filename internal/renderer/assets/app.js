@@ -1071,14 +1071,14 @@
         if (!selectedContent) return;
 
         var value = collectSingleFieldValue(selectedContent, selectedField);
-        if (value !== undefined && value !== null && value !== "") {
+        if (value !== undefined && value !== null && value !== "" && value !== false) {
           data[selectedField.name] = value;
         }
         return;
       }
 
       var value = collectFieldValue(container, field);
-      if (value !== undefined && value !== null && value !== "") {
+      if (value !== undefined && value !== null && value !== "" && value !== false) {
         data[field.name] = value;
       }
     });
@@ -1281,10 +1281,11 @@
 
       var elapsed = Math.round(performance.now() - start);
       var respBody;
+      var clone = resp.clone();
       try {
         respBody = await resp.json();
       } catch (e) {
-        respBody = await resp.text().catch(function () {
+        respBody = await clone.text().catch(function () {
           return "";
         });
       }
@@ -1315,10 +1316,11 @@
 
     var elapsed = Math.round(performance.now() - start);
     var respBody;
+    var clone = resp.clone();
     try {
       respBody = await resp.json();
     } catch (e) {
-      respBody = await resp.text().catch(function () {
+      respBody = await clone.text().catch(function () {
         return "";
       });
     }
