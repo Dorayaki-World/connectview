@@ -4,9 +4,38 @@ import (
 	"testing"
 
 	"github.com/Dorayaki-World/connectview/internal/ir"
+	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/pluginpb"
 )
+
+// newPlugin creates a *protogen.Plugin from FileDescriptorProtos.
+// Each file is marked for generation (added to FileToGenerate).
+// A default go_package option is added if not already present.
+func newPlugin(t *testing.T, fds ...*descriptorpb.FileDescriptorProto) *protogen.Plugin {
+	t.Helper()
+
+	req := &pluginpb.CodeGeneratorRequest{}
+	for _, fd := range fds {
+		// Ensure go_package is set so protogen.Options{}.New() does not fail.
+		if fd.GetOptions().GetGoPackage() == "" {
+			if fd.Options == nil {
+				fd.Options = &descriptorpb.FileOptions{}
+			}
+			goPkg := fd.GetPackage() + "pb"
+			fd.Options.GoPackage = &goPkg
+		}
+		req.ProtoFile = append(req.ProtoFile, fd)
+		req.FileToGenerate = append(req.FileToGenerate, fd.GetName())
+	}
+
+	gen, err := protogen.Options{}.New(req)
+	if err != nil {
+		t.Fatalf("protogen.Options{}.New() failed: %v", err)
+	}
+	return gen
+}
 
 // TestParseService_Basic verifies that a service is parsed correctly,
 // including its name, fullName, connectBasePath, and RPC details
@@ -34,10 +63,8 @@ func TestParseService_Basic(t *testing.T) {
 		},
 	}
 
-	root, err := Parse([]*descriptorpb.FileDescriptorProto{fd})
-	if err != nil {
-		t.Fatalf("Parse returned error: %v", err)
-	}
+	plugin := newPlugin(t, fd)
+	root := Parse(plugin)
 
 	if len(root.Services) != 1 {
 		t.Fatalf("expected 1 service, got %d", len(root.Services))
@@ -52,6 +79,9 @@ func TestParseService_Basic(t *testing.T) {
 	}
 	if svc.ConnectBasePath != "/greet.v1.GreetService/" {
 		t.Errorf("connectBasePath: got %q, want %q", svc.ConnectBasePath, "/greet.v1.GreetService/")
+	}
+	if svc.File != "greet/v1/greet.proto" {
+		t.Errorf("file: got %q, want %q", svc.File, "greet/v1/greet.proto")
 	}
 
 	if len(svc.RPCs) != 1 {
@@ -110,10 +140,8 @@ func TestParseRPC_IdempotencyLevel_GET(t *testing.T) {
 		},
 	}
 
-	root, err := Parse([]*descriptorpb.FileDescriptorProto{fd})
-	if err != nil {
-		t.Fatalf("Parse returned error: %v", err)
-	}
+	plugin := newPlugin(t, fd)
+	root := Parse(plugin)
 
 	if len(root.Services) != 1 {
 		t.Fatalf("expected 1 service, got %d", len(root.Services))
@@ -172,10 +200,8 @@ func TestParseMessage_FieldTypes(t *testing.T) {
 		},
 	}
 
-	root, err := Parse([]*descriptorpb.FileDescriptorProto{fd})
-	if err != nil {
-		t.Fatalf("Parse returned error: %v", err)
-	}
+	plugin := newPlugin(t, fd)
+	root := Parse(plugin)
 
 	msg, ok := root.Messages[".test.v1.User"]
 	if !ok {
@@ -219,83 +245,152 @@ func TestParseMessage_FieldTypes(t *testing.T) {
 	}
 }
 
-// TestParseMessage_Nested verifies that a nested message inside another
-// message is registered in root.Messages with its correct fully-qualified name.
-func TestParseMessage_Nested(t *testing.T) {
+// TestParseMessage_Streaming verifies that server/client streaming flags
+// are parsed correctly.
+func TestParseMessage_Streaming(t *testing.T) {
 	fd := &descriptorpb.FileDescriptorProto{
 		Name:    proto.String("test.proto"),
 		Package: proto.String("test.v1"),
 		Syntax:  proto.String("proto3"),
-		MessageType: []*descriptorpb.DescriptorProto{
+		Service: []*descriptorpb.ServiceDescriptorProto{
 			{
-				Name: proto.String("Outer"),
-				Field: []*descriptorpb.FieldDescriptorProto{
+				Name: proto.String("StreamService"),
+				Method: []*descriptorpb.MethodDescriptorProto{
 					{
-						Name:     proto.String("inner"),
-						Number:   proto.Int32(1),
-						Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
-						TypeName: proto.String(".test.v1.Outer.Inner"),
-						Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Name:            proto.String("ServerStream"),
+						InputType:       proto.String(".test.v1.StreamReq"),
+						OutputType:      proto.String(".test.v1.StreamRes"),
+						ServerStreaming:  proto.Bool(true),
+						ClientStreaming:  proto.Bool(false),
 					},
 				},
-				NestedType: []*descriptorpb.DescriptorProto{
+			},
+		},
+		MessageType: []*descriptorpb.DescriptorProto{
+			{Name: proto.String("StreamReq")},
+			{Name: proto.String("StreamRes")},
+		},
+	}
+
+	plugin := newPlugin(t, fd)
+	root := Parse(plugin)
+
+	if len(root.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(root.Services))
+	}
+	if len(root.Services[0].RPCs) != 1 {
+		t.Fatalf("expected 1 RPC, got %d", len(root.Services[0].RPCs))
+	}
+
+	rpc := root.Services[0].RPCs[0]
+	if !rpc.ServerStreaming {
+		t.Error("expected ServerStreaming=true, got false")
+	}
+	if rpc.ClientStreaming {
+		t.Error("expected ClientStreaming=false, got true")
+	}
+}
+
+// TestParseMessage_Comments verifies that comments are extracted from
+// SourceCodeInfo for services, RPCs, messages, and fields.
+func TestParseMessage_Comments(t *testing.T) {
+	fd := &descriptorpb.FileDescriptorProto{
+		Name:    proto.String("test.proto"),
+		Package: proto.String("test.v1"),
+		Syntax:  proto.String("proto3"),
+		Service: []*descriptorpb.ServiceDescriptorProto{
+			{
+				Name: proto.String("CommentService"),
+				Method: []*descriptorpb.MethodDescriptorProto{
 					{
-						Name: proto.String("Inner"),
-						Field: []*descriptorpb.FieldDescriptorProto{
-							{
-								Name:   proto.String("value"),
-								Number: proto.Int32(1),
-								Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
-								Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
-							},
-						},
+						Name:       proto.String("DoStuff"),
+						InputType:  proto.String(".test.v1.Req"),
+						OutputType: proto.String(".test.v1.Res"),
 					},
+				},
+			},
+		},
+		MessageType: []*descriptorpb.DescriptorProto{
+			{
+				Name: proto.String("Req"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					{
+						Name:   proto.String("query"),
+						Number: proto.Int32(1),
+						Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+						Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+					},
+				},
+			},
+			{Name: proto.String("Res")},
+		},
+		SourceCodeInfo: &descriptorpb.SourceCodeInfo{
+			Location: []*descriptorpb.SourceCodeInfo_Location{
+				{
+					Path:            []int32{6, 0}, // service index 0
+					Span:            []int32{3, 0, 10, 1},
+					LeadingComments: proto.String(" Service comment.\n"),
+				},
+				{
+					Path:            []int32{6, 0, 2, 0}, // service 0, method 0
+					Span:            []int32{5, 2, 7, 3},
+					LeadingComments: proto.String(" RPC comment.\n"),
+				},
+				{
+					Path:            []int32{4, 0}, // message index 0
+					Span:            []int32{12, 0, 16, 1},
+					LeadingComments: proto.String(" Message comment.\n"),
+				},
+				{
+					Path:            []int32{4, 0, 2, 0}, // message 0, field 0
+					Span:            []int32{14, 2, 14, 20},
+					LeadingComments: proto.String(" Field comment.\n"),
 				},
 			},
 		},
 	}
 
-	root, err := Parse([]*descriptorpb.FileDescriptorProto{fd})
-	if err != nil {
-		t.Fatalf("Parse returned error: %v", err)
+	plugin := newPlugin(t, fd)
+	root := Parse(plugin)
+
+	// Verify service comment
+	if len(root.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(root.Services))
+	}
+	svc := root.Services[0]
+	if svc.Comment != "Service comment." {
+		t.Errorf("service comment: got %q, want %q", svc.Comment, "Service comment.")
 	}
 
-	// Outer should exist
-	outer, ok := root.Messages[".test.v1.Outer"]
-	if !ok {
-		t.Fatalf("message .test.v1.Outer not found in root.Messages")
+	// Verify RPC comment
+	if len(svc.RPCs) != 1 {
+		t.Fatalf("expected 1 RPC, got %d", len(svc.RPCs))
 	}
-	if outer.FullName != ".test.v1.Outer" {
-		t.Errorf("outer fullName: got %q, want %q", outer.FullName, ".test.v1.Outer")
+	if svc.RPCs[0].Comment != "RPC comment." {
+		t.Errorf("rpc comment: got %q, want %q", svc.RPCs[0].Comment, "RPC comment.")
 	}
 
-	// Nested Inner should also be registered in root.Messages
-	inner, ok := root.Messages[".test.v1.Outer.Inner"]
+	// Verify message comment
+	msg, ok := root.Messages[".test.v1.Req"]
 	if !ok {
-		t.Fatalf("nested message .test.v1.Outer.Inner not found in root.Messages")
+		t.Fatalf("message .test.v1.Req not found in root.Messages")
 	}
-	if inner.FullName != ".test.v1.Outer.Inner" {
-		t.Errorf("inner fullName: got %q, want %q", inner.FullName, ".test.v1.Outer.Inner")
+	if msg.Comment != "Message comment." {
+		t.Errorf("message comment: got %q, want %q", msg.Comment, "Message comment.")
 	}
-	if inner.Name != "Inner" {
-		t.Errorf("inner name: got %q, want %q", inner.Name, "Inner")
+
+	// Verify field comment
+	if len(msg.Fields) != 1 {
+		t.Fatalf("expected 1 field, got %d", len(msg.Fields))
 	}
-	if len(inner.Fields) != 1 {
-		t.Fatalf("inner fields: expected 1, got %d", len(inner.Fields))
-	}
-	if inner.Fields[0].Name != "value" {
-		t.Errorf("inner field name: got %q, want %q", inner.Fields[0].Name, "value")
+	if msg.Fields[0].Comment != "Field comment." {
+		t.Errorf("field comment: got %q, want %q", msg.Fields[0].Comment, "Field comment.")
 	}
 }
 
-// TestParseMessage_MapField verifies map field detection. Proto maps are
-// represented as a repeated field with a synthetic MapEntry nested message
-// type. The MapEntry message has options.GetMapEntry() == true. The field's
-// typeName points to the MapEntry. The parser should set IsMap=true,
-// MapKeyType, and MapValueType on the Field.
+// TestParseMessage_MapField verifies map field detection using protogen's
+// built-in field.Desc.IsMap().
 func TestParseMessage_MapField(t *testing.T) {
-	// map<string, string> metadata = 7;
-	// This creates a nested MapEntry message and a repeated field of that type.
 	nestedMapEntry := &descriptorpb.DescriptorProto{
 		Name: proto.String("MetadataEntry"),
 		Field: []*descriptorpb.FieldDescriptorProto{
@@ -336,10 +431,8 @@ func TestParseMessage_MapField(t *testing.T) {
 		},
 	}
 
-	root, err := Parse([]*descriptorpb.FileDescriptorProto{fd})
-	if err != nil {
-		t.Fatalf("Parse returned error: %v", err)
-	}
+	plugin := newPlugin(t, fd)
+	root := Parse(plugin)
 
 	msg, ok := root.Messages[".test.v1.MyMessage"]
 	if !ok {
@@ -365,8 +458,6 @@ func TestParseMessage_MapField(t *testing.T) {
 }
 
 // TestParseMessage_OptionalField verifies proto3 optional detection.
-// Proto3Optional=true on the FieldDescriptorProto with a synthetic oneof
-// should result in IsOptional=true and OneofName not being set.
 func TestParseMessage_OptionalField(t *testing.T) {
 	fd := &descriptorpb.FileDescriptorProto{
 		Name:    proto.String("test.proto"),
@@ -392,10 +483,8 @@ func TestParseMessage_OptionalField(t *testing.T) {
 		},
 	}
 
-	root, err := Parse([]*descriptorpb.FileDescriptorProto{fd})
-	if err != nil {
-		t.Fatalf("Parse returned error: %v", err)
-	}
+	plugin := newPlugin(t, fd)
+	root := Parse(plugin)
 
 	msg, ok := root.Messages[".test.v1.Msg"]
 	if !ok {
@@ -417,9 +506,7 @@ func TestParseMessage_OptionalField(t *testing.T) {
 	}
 }
 
-// TestParseMessage_Oneof verifies oneof field grouping. Fields that
-// reference a OneofDecl via OneofIndex should have OneofName set to the
-// name of the oneof declaration.
+// TestParseMessage_Oneof verifies oneof field grouping.
 func TestParseMessage_Oneof(t *testing.T) {
 	fd := &descriptorpb.FileDescriptorProto{
 		Name:    proto.String("test.proto"),
@@ -430,11 +517,10 @@ func TestParseMessage_Oneof(t *testing.T) {
 				Name: proto.String("Event"),
 				Field: []*descriptorpb.FieldDescriptorProto{
 					{
-						Name:       proto.String("id"),
-						Number:     proto.Int32(1),
-						Type:       descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
-						Label:      descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
-						// No OneofIndex — regular field
+						Name:   proto.String("id"),
+						Number: proto.Int32(1),
+						Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+						Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
 					},
 					{
 						Name:       proto.String("text_payload"),
@@ -458,10 +544,8 @@ func TestParseMessage_Oneof(t *testing.T) {
 		},
 	}
 
-	root, err := Parse([]*descriptorpb.FileDescriptorProto{fd})
-	if err != nil {
-		t.Fatalf("Parse returned error: %v", err)
-	}
+	plugin := newPlugin(t, fd)
+	root := Parse(plugin)
 
 	msg, ok := root.Messages[".test.v1.Event"]
 	if !ok {
@@ -471,7 +555,7 @@ func TestParseMessage_Oneof(t *testing.T) {
 		t.Fatalf("expected 3 fields, got %d", len(msg.Fields))
 	}
 
-	// id — regular field, not in a oneof
+	// id - regular field, not in a oneof
 	f0 := msg.Fields[0]
 	if f0.Name != "id" {
 		t.Errorf("field 0 name: got %q, want %q", f0.Name, "id")
@@ -480,7 +564,7 @@ func TestParseMessage_Oneof(t *testing.T) {
 		t.Errorf("field 0 OneofName: got %q, want empty", f0.OneofName)
 	}
 
-	// text_payload — in oneof "payload"
+	// text_payload - in oneof "payload"
 	f1 := msg.Fields[1]
 	if f1.Name != "text_payload" {
 		t.Errorf("field 1 name: got %q, want %q", f1.Name, "text_payload")
@@ -489,7 +573,7 @@ func TestParseMessage_Oneof(t *testing.T) {
 		t.Errorf("field 1 OneofName: got %q, want %q", f1.OneofName, "payload")
 	}
 
-	// binary_payload — in oneof "payload"
+	// binary_payload - in oneof "payload"
 	f2 := msg.Fields[2]
 	if f2.Name != "binary_payload" {
 		t.Errorf("field 2 name: got %q, want %q", f2.Name, "binary_payload")
@@ -499,8 +583,67 @@ func TestParseMessage_Oneof(t *testing.T) {
 	}
 }
 
-// TestParseEnum verifies that an enum is parsed correctly, including
-// its name, fullName, and values (name and number).
+// TestParseFile verifies that files are parsed correctly.
+func TestParseFile(t *testing.T) {
+	fd := &descriptorpb.FileDescriptorProto{
+		Name:    proto.String("greet/v1/greet.proto"),
+		Package: proto.String("greet.v1"),
+		Syntax:  proto.String("proto3"),
+	}
+
+	plugin := newPlugin(t, fd)
+	root := Parse(plugin)
+
+	if len(root.Files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(root.Files))
+	}
+
+	f := root.Files[0]
+	if f.Name != "greet/v1/greet.proto" {
+		t.Errorf("file name: got %q, want %q", f.Name, "greet/v1/greet.proto")
+	}
+	if f.Package != "greet.v1" {
+		t.Errorf("file package: got %q, want %q", f.Package, "greet.v1")
+	}
+}
+
+// TestParseSkipsNonGenerateFiles verifies that files not marked for
+// generation are skipped.
+func TestParseSkipsNonGenerateFiles(t *testing.T) {
+	fd1 := &descriptorpb.FileDescriptorProto{
+		Name:    proto.String("dep.proto"),
+		Package: proto.String("dep.v1"),
+		Syntax:  proto.String("proto3"),
+		Options: &descriptorpb.FileOptions{GoPackage: proto.String("dep.v1pb")},
+	}
+	fd2 := &descriptorpb.FileDescriptorProto{
+		Name:    proto.String("main.proto"),
+		Package: proto.String("main.v1"),
+		Syntax:  proto.String("proto3"),
+		Options: &descriptorpb.FileOptions{GoPackage: proto.String("main.v1pb")},
+	}
+
+	req := &pluginpb.CodeGeneratorRequest{
+		ProtoFile:      []*descriptorpb.FileDescriptorProto{fd1, fd2},
+		FileToGenerate: []string{"main.proto"}, // only main.proto should be processed
+	}
+
+	gen, err := protogen.Options{}.New(req)
+	if err != nil {
+		t.Fatalf("protogen.Options{}.New() failed: %v", err)
+	}
+
+	root := Parse(gen)
+
+	if len(root.Files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(root.Files))
+	}
+	if root.Files[0].Name != "main.proto" {
+		t.Errorf("expected main.proto, got %q", root.Files[0].Name)
+	}
+}
+
+// TestParseEnum verifies that an enum is parsed correctly.
 func TestParseEnum(t *testing.T) {
 	fd := &descriptorpb.FileDescriptorProto{
 		Name:    proto.String("test.proto"),
@@ -518,10 +661,8 @@ func TestParseEnum(t *testing.T) {
 		},
 	}
 
-	root, err := Parse([]*descriptorpb.FileDescriptorProto{fd})
-	if err != nil {
-		t.Fatalf("Parse returned error: %v", err)
-	}
+	plugin := newPlugin(t, fd)
+	root := Parse(plugin)
 
 	enum, ok := root.Enums[".test.v1.Status"]
 	if !ok {
@@ -556,77 +697,67 @@ func TestParseEnum(t *testing.T) {
 	}
 }
 
-// TestParseComment verifies comment extraction from SourceCodeInfo.
-// SourceCodeInfo.Location entries for a service and a message field
-// should result in comments being set on the corresponding IR types.
-func TestParseComment(t *testing.T) {
+// TestParseMessage_Nested verifies that nested messages are registered
+// in root.Messages with correct FQNs.
+func TestParseMessage_Nested(t *testing.T) {
 	fd := &descriptorpb.FileDescriptorProto{
 		Name:    proto.String("test.proto"),
 		Package: proto.String("test.v1"),
 		Syntax:  proto.String("proto3"),
-		Service: []*descriptorpb.ServiceDescriptorProto{
-			{
-				Name: proto.String("CommentService"),
-				Method: []*descriptorpb.MethodDescriptorProto{
-					{
-						Name:       proto.String("DoStuff"),
-						InputType:  proto.String(".test.v1.Req"),
-						OutputType: proto.String(".test.v1.Res"),
-					},
-				},
-			},
-		},
 		MessageType: []*descriptorpb.DescriptorProto{
 			{
-				Name: proto.String("Req"),
+				Name: proto.String("Outer"),
 				Field: []*descriptorpb.FieldDescriptorProto{
 					{
-						Name:   proto.String("query"),
-						Number: proto.Int32(1),
-						Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
-						Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Name:     proto.String("inner"),
+						Number:   proto.Int32(1),
+						Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+						TypeName: proto.String(".test.v1.Outer.Inner"),
+						Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+					},
+				},
+				NestedType: []*descriptorpb.DescriptorProto{
+					{
+						Name: proto.String("Inner"),
+						Field: []*descriptorpb.FieldDescriptorProto{
+							{
+								Name:   proto.String("value"),
+								Number: proto.Int32(1),
+								Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+								Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+							},
+						},
 					},
 				},
 			},
-			{Name: proto.String("Res")},
-		},
-		SourceCodeInfo: &descriptorpb.SourceCodeInfo{
-			Location: []*descriptorpb.SourceCodeInfo_Location{
-				{
-					Path:            []int32{6, 0}, // service index 0
-					LeadingComments: proto.String(" Service comment.\n"),
-				},
-				{
-					Path:            []int32{4, 0, 2, 0}, // message 0, field 0
-					LeadingComments: proto.String(" Field comment.\n"),
-				},
-			},
 		},
 	}
 
-	root, err := Parse([]*descriptorpb.FileDescriptorProto{fd})
-	if err != nil {
-		t.Fatalf("Parse returned error: %v", err)
-	}
+	plugin := newPlugin(t, fd)
+	root := Parse(plugin)
 
-	// Verify service comment
-	if len(root.Services) != 1 {
-		t.Fatalf("expected 1 service, got %d", len(root.Services))
-	}
-	svc := root.Services[0]
-	if svc.Comment != "Service comment." {
-		t.Errorf("service comment: got %q, want %q", svc.Comment, "Service comment.")
-	}
-
-	// Verify field comment
-	msg, ok := root.Messages[".test.v1.Req"]
+	outer, ok := root.Messages[".test.v1.Outer"]
 	if !ok {
-		t.Fatalf("message .test.v1.Req not found in root.Messages")
+		t.Fatalf("message .test.v1.Outer not found in root.Messages")
 	}
-	if len(msg.Fields) != 1 {
-		t.Fatalf("expected 1 field, got %d", len(msg.Fields))
+	if outer.FullName != ".test.v1.Outer" {
+		t.Errorf("outer fullName: got %q, want %q", outer.FullName, ".test.v1.Outer")
 	}
-	if msg.Fields[0].Comment != "Field comment." {
-		t.Errorf("field comment: got %q, want %q", msg.Fields[0].Comment, "Field comment.")
+
+	inner, ok := root.Messages[".test.v1.Outer.Inner"]
+	if !ok {
+		t.Fatalf("nested message .test.v1.Outer.Inner not found in root.Messages")
+	}
+	if inner.FullName != ".test.v1.Outer.Inner" {
+		t.Errorf("inner fullName: got %q, want %q", inner.FullName, ".test.v1.Outer.Inner")
+	}
+	if inner.Name != "Inner" {
+		t.Errorf("inner name: got %q, want %q", inner.Name, "Inner")
+	}
+	if len(inner.Fields) != 1 {
+		t.Fatalf("inner fields: expected 1, got %d", len(inner.Fields))
+	}
+	if inner.Fields[0].Name != "value" {
+		t.Errorf("inner field name: got %q, want %q", inner.Fields[0].Name, "value")
 	}
 }

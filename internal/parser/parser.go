@@ -4,196 +4,267 @@ import (
 	"strings"
 
 	"github.com/Dorayaki-World/connectview/internal/ir"
+	"google.golang.org/protobuf/compiler/protogen"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
-// Parse converts a slice of FileDescriptorProto into the intermediate representation.
-func Parse(fds []*descriptorpb.FileDescriptorProto) (*ir.Root, error) {
+// Parse converts a *protogen.Plugin into the intermediate representation.
+// Only files where f.Generate == true are processed.
+func Parse(plugin *protogen.Plugin) *ir.Root {
 	root := &ir.Root{
 		Messages: make(map[string]*ir.Message),
 		Enums:    make(map[string]*ir.Enum),
 	}
 
-	for _, fd := range fds {
+	for _, f := range plugin.Files {
+		if !f.Generate {
+			continue
+		}
+
 		file := &ir.File{
-			Name:    fd.GetName(),
-			Package: fd.GetPackage(),
+			Name:    f.Desc.Path(),
+			Package: string(f.Desc.Package()),
 		}
 		root.Files = append(root.Files, file)
 
-		prefix := "." + fd.GetPackage()
-
-		// Parse services (field number 6 in FileDescriptorProto).
-		for i, sd := range fd.GetService() {
-			svc := parseService(fd, sd, i)
-			root.Services = append(root.Services, svc)
+		// Parse top-level enums.
+		for _, enum := range f.Enums {
+			e := parseEnum(enum)
+			root.Enums[e.FullName] = e
 		}
 
-		// Parse top-level messages (field number 4 in FileDescriptorProto).
-		for i, md := range fd.GetMessageType() {
-			msgPath := []int32{4, int32(i)}
-			msg := parseMessage(fd, md, prefix, msgPath, root)
-			root.Messages[msg.FullName] = msg
+		// Parse top-level messages.
+		for _, msg := range f.Messages {
+			parseMessageRecursive(msg, root)
 		}
 
-		// Parse top-level enums (field number 5 in FileDescriptorProto).
-		for i, ed := range fd.GetEnumType() {
-			enumPath := []int32{5, int32(i)}
-			enum := parseEnum(fd, ed, prefix, enumPath)
-			root.Enums[enum.FullName] = enum
+		// Parse services.
+		for _, svc := range f.Services {
+			s := parseService(svc, f)
+			root.Services = append(root.Services, s)
 		}
 	}
 
-	return root, nil
+	return root
 }
 
-func parseService(fd *descriptorpb.FileDescriptorProto, sd *descriptorpb.ServiceDescriptorProto, serviceIndex int) *ir.Service {
-	fullName := fd.GetPackage() + "." + sd.GetName()
+func parseService(svc *protogen.Service, f *protogen.File) *ir.Service {
+	fullName := string(svc.Desc.FullName())
 
-	svc := &ir.Service{
-		Name:            sd.GetName(),
+	s := &ir.Service{
+		Name:            string(svc.Desc.Name()),
 		FullName:        fullName,
-		File:            fd.GetName(),
-		Comment:         extractComment(fd, []int32{6, int32(serviceIndex)}),
+		File:            f.Desc.Path(),
+		Comment:         trimComment(string(svc.Comments.Leading)),
 		ConnectBasePath: "/" + fullName + "/",
 	}
 
-	for i, md := range sd.GetMethod() {
-		rpc := parseRPC(fd, md, fullName, serviceIndex, i)
-		svc.RPCs = append(svc.RPCs, rpc)
+	for _, method := range svc.Methods {
+		rpc := parseRPC(method, fullName)
+		s.RPCs = append(s.RPCs, rpc)
 	}
 
-	return svc
+	return s
 }
 
-func parseRPC(fd *descriptorpb.FileDescriptorProto, md *descriptorpb.MethodDescriptorProto, serviceFQN string, serviceIndex, methodIndex int) *ir.RPC {
+func parseRPC(method *protogen.Method, serviceFQN string) *ir.RPC {
 	httpMethod := "POST"
-	if md.GetOptions() != nil &&
-		md.GetOptions().GetIdempotencyLevel() == descriptorpb.MethodOptions_NO_SIDE_EFFECTS {
+	methodOpts, ok := method.Desc.Options().(*descriptorpb.MethodOptions)
+	if ok && methodOpts != nil &&
+		methodOpts.GetIdempotencyLevel() == descriptorpb.MethodOptions_NO_SIDE_EFFECTS {
 		httpMethod = "GET"
 	}
 
+	inputFQN := "." + string(method.Input.Desc.FullName())
+	outputFQN := "." + string(method.Output.Desc.FullName())
+
 	return &ir.RPC{
-		Name:        md.GetName(),
-		Comment:     extractComment(fd, []int32{6, int32(serviceIndex), 2, int32(methodIndex)}),
-		ConnectPath: "/" + serviceFQN + "/" + md.GetName(),
+		Name:        string(method.Desc.Name()),
+		Comment:     trimComment(string(method.Comments.Leading)),
+		ConnectPath: "/" + serviceFQN + "/" + string(method.Desc.Name()),
 		HTTPMethod:  httpMethod,
 		Request: &ir.MessageRef{
-			TypeName: md.GetInputType(),
+			TypeName: inputFQN,
 		},
 		Response: &ir.MessageRef{
-			TypeName: md.GetOutputType(),
+			TypeName: outputFQN,
 		},
-		ClientStreaming: md.GetClientStreaming(),
-		ServerStreaming: md.GetServerStreaming(),
+		ClientStreaming: method.Desc.IsStreamingClient(),
+		ServerStreaming: method.Desc.IsStreamingServer(),
 	}
 }
 
-func parseMessage(fd *descriptorpb.FileDescriptorProto, md *descriptorpb.DescriptorProto, prefix string, msgPath []int32, root *ir.Root) *ir.Message {
-	fullName := prefix + "." + md.GetName()
+// parseMessageRecursive parses a protogen.Message and all its nested
+// messages and enums, registering them in root.
+func parseMessageRecursive(msg *protogen.Message, root *ir.Root) *ir.Message {
+	// Skip map entry messages.
+	if msg.Desc.IsMapEntry() {
+		return nil
+	}
 
-	msg := &ir.Message{
-		Name:     md.GetName(),
+	fullName := "." + string(msg.Desc.FullName())
+
+	m := &ir.Message{
+		Name:     string(msg.Desc.Name()),
 		FullName: fullName,
-		Comment:  extractComment(fd, msgPath),
+		Comment:  trimComment(string(msg.Comments.Leading)),
 	}
 
-	// Parse nested messages (field number 3 in DescriptorProto).
-	for i, nested := range md.GetNestedType() {
-		// Skip MapEntry synthetic messages.
-		if nested.GetOptions() != nil && nested.GetOptions().GetMapEntry() {
-			continue
+	// Parse nested enums.
+	for _, enum := range msg.Enums {
+		e := parseEnum(enum)
+		m.NestedEnums = append(m.NestedEnums, e)
+		root.Enums[e.FullName] = e
+	}
+
+	// Parse nested messages (recursively).
+	for _, nested := range msg.Messages {
+		nestedMsg := parseMessageRecursive(nested, root)
+		if nestedMsg != nil { // nil means it was a map entry
+			m.NestedMessages = append(m.NestedMessages, nestedMsg)
 		}
-		nestedPath := append(msgPath, 3, int32(i))
-		nestedMsg := parseMessage(fd, nested, fullName, nestedPath, root)
-		msg.NestedMessages = append(msg.NestedMessages, nestedMsg)
-		root.Messages[nestedMsg.FullName] = nestedMsg
 	}
 
-	// Parse nested enums (field number 4 in DescriptorProto).
-	for i, ed := range md.GetEnumType() {
-		enumPath := append(msgPath, 4, int32(i))
-		enum := parseEnum(fd, ed, fullName, enumPath)
-		msg.NestedEnums = append(msg.NestedEnums, enum)
-		root.Enums[enum.FullName] = enum
+	// Parse fields.
+	for _, field := range msg.Fields {
+		f := parseField(field)
+		m.Fields = append(m.Fields, f)
 	}
 
-	// Parse fields (field number 2 in DescriptorProto).
-	for i, field := range md.GetField() {
-		fieldPath := append(msgPath, 2, int32(i))
-		f := parseField(fd, field, md, fieldPath)
-		msg.Fields = append(msg.Fields, f)
-	}
-
-	return msg
+	root.Messages[fullName] = m
+	return m
 }
 
-func parseField(fd *descriptorpb.FileDescriptorProto, field *descriptorpb.FieldDescriptorProto, parentMsg *descriptorpb.DescriptorProto, fieldPath []int32) *ir.Field {
+func parseField(field *protogen.Field) *ir.Field {
 	f := &ir.Field{
-		Name:     field.GetName(),
-		Number:   field.GetNumber(),
-		Type:     ir.FieldType(field.GetType()),
-		TypeName: field.GetTypeName(),
-		Label:    ir.FieldLabel(field.GetLabel()),
-		Comment:  extractComment(fd, fieldPath),
+		Name:    string(field.Desc.Name()),
+		Number:  int32(field.Desc.Number()),
+		Type:    protoKindToFieldType(field.Desc.Kind()),
+		Label:   protoCardinalityToLabel(field.Desc.Cardinality()),
+		Comment: trimComment(string(field.Comments.Leading)),
 	}
 
-	// Check for map fields: the field must be of type MESSAGE with label REPEATED,
-	// and the referenced type must be a synthetic MapEntry message.
-	if field.GetType() == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE &&
-		field.GetLabel() == descriptorpb.FieldDescriptorProto_LABEL_REPEATED {
-		for _, nested := range parentMsg.GetNestedType() {
-			if nested.GetOptions() != nil && nested.GetOptions().GetMapEntry() &&
-				strings.HasSuffix(field.GetTypeName(), "."+nested.GetName()) {
-				f.IsMap = true
-				for _, mapField := range nested.GetField() {
-					switch mapField.GetNumber() {
-					case 1: // key
-						f.MapKeyType = ir.FieldType(mapField.GetType())
-					case 2: // value
-						f.MapValueType = ir.FieldType(mapField.GetType())
-						f.MapValueTypeName = mapField.GetTypeName()
-					}
-				}
-				break
-			}
+	// Set TypeName for message and enum types.
+	if field.Desc.Kind() == protoreflect.MessageKind || field.Desc.Kind() == protoreflect.GroupKind {
+		f.TypeName = "." + string(field.Desc.Message().FullName())
+	} else if field.Desc.Kind() == protoreflect.EnumKind {
+		f.TypeName = "." + string(field.Desc.Enum().FullName())
+	}
+
+	// Check for map fields using protogen's built-in detection.
+	if field.Desc.IsMap() {
+		f.IsMap = true
+		f.Type = ir.FieldTypeMessage // map fields are message type
+		f.Label = ir.FieldLabelRepeated
+
+		// Extract key/value types from the map entry message fields.
+		keyField := field.Message.Fields[0]
+		valueField := field.Message.Fields[1]
+
+		f.MapKeyType = protoKindToFieldType(keyField.Desc.Kind())
+		f.MapValueType = protoKindToFieldType(valueField.Desc.Kind())
+		if valueField.Desc.Kind() == protoreflect.MessageKind {
+			f.MapValueTypeName = "." + string(valueField.Desc.Message().FullName())
+		} else if valueField.Desc.Kind() == protoreflect.EnumKind {
+			f.MapValueTypeName = "." + string(valueField.Desc.Enum().FullName())
 		}
+
+		// TypeName for map fields points to the synthetic MapEntry message.
+		f.TypeName = "." + string(field.Desc.Message().FullName())
 	}
 
 	// Check for proto3 optional.
-	if field.GetProto3Optional() {
+	if field.Desc.HasOptionalKeyword() {
 		f.IsOptional = true
-		// Do not set OneofName for proto3 optional fields.
-	} else if field.OneofIndex != nil {
-		// Regular oneof field.
-		idx := field.GetOneofIndex()
-		if int(idx) < len(parentMsg.GetOneofDecl()) {
-			f.OneofName = parentMsg.GetOneofDecl()[idx].GetName()
-		}
+	}
+
+	// Set OneofName for real (non-synthetic) oneofs.
+	if field.Oneof != nil && !field.Oneof.Desc.IsSynthetic() {
+		f.OneofName = string(field.Oneof.Desc.Name())
 	}
 
 	return f
 }
 
-func parseEnum(fd *descriptorpb.FileDescriptorProto, ed *descriptorpb.EnumDescriptorProto, prefix string, enumPath []int32) *ir.Enum {
-	fullName := prefix + "." + ed.GetName()
+func parseEnum(enum *protogen.Enum) *ir.Enum {
+	fullName := "." + string(enum.Desc.FullName())
 
-	enum := &ir.Enum{
-		Name:     ed.GetName(),
+	e := &ir.Enum{
+		Name:     string(enum.Desc.Name()),
 		FullName: fullName,
-		Comment:  extractComment(fd, enumPath),
+		Comment:  trimComment(string(enum.Comments.Leading)),
 	}
 
-	// Parse enum values (field number 2 in EnumDescriptorProto).
-	for i, v := range ed.GetValue() {
-		valuePath := append(enumPath, 2, int32(i))
+	for _, v := range enum.Values {
 		ev := &ir.EnumValue{
-			Name:    v.GetName(),
-			Number:  v.GetNumber(),
-			Comment: extractComment(fd, valuePath),
+			Name:    string(v.Desc.Name()),
+			Number:  int32(v.Desc.Number()),
+			Comment: trimComment(string(v.Comments.Leading)),
 		}
-		enum.Values = append(enum.Values, ev)
+		e.Values = append(e.Values, ev)
 	}
 
-	return enum
+	return e
+}
+
+// protoKindToFieldType maps protoreflect.Kind to ir.FieldType.
+func protoKindToFieldType(kind protoreflect.Kind) ir.FieldType {
+	switch kind {
+	case protoreflect.DoubleKind:
+		return ir.FieldTypeDouble
+	case protoreflect.FloatKind:
+		return ir.FieldTypeFloat
+	case protoreflect.Int64Kind:
+		return ir.FieldTypeInt64
+	case protoreflect.Uint64Kind:
+		return ir.FieldTypeUint64
+	case protoreflect.Int32Kind:
+		return ir.FieldTypeInt32
+	case protoreflect.Fixed64Kind:
+		return ir.FieldTypeFixed64
+	case protoreflect.Fixed32Kind:
+		return ir.FieldTypeFixed32
+	case protoreflect.BoolKind:
+		return ir.FieldTypeBool
+	case protoreflect.StringKind:
+		return ir.FieldTypeString
+	case protoreflect.MessageKind, protoreflect.GroupKind:
+		return ir.FieldTypeMessage
+	case protoreflect.BytesKind:
+		return ir.FieldTypeBytes
+	case protoreflect.Uint32Kind:
+		return ir.FieldTypeUint32
+	case protoreflect.EnumKind:
+		return ir.FieldTypeEnum
+	case protoreflect.Sfixed32Kind:
+		return ir.FieldTypeSfixed32
+	case protoreflect.Sfixed64Kind:
+		return ir.FieldTypeSfixed64
+	case protoreflect.Sint32Kind:
+		return ir.FieldTypeSint32
+	case protoreflect.Sint64Kind:
+		return ir.FieldTypeSint64
+	default:
+		return 0
+	}
+}
+
+// protoCardinalityToLabel maps protoreflect.Cardinality to ir.FieldLabel.
+func protoCardinalityToLabel(c protoreflect.Cardinality) ir.FieldLabel {
+	switch c {
+	case protoreflect.Optional:
+		return ir.FieldLabelOptional
+	case protoreflect.Required:
+		return ir.FieldLabelRequired
+	case protoreflect.Repeated:
+		return ir.FieldLabelRepeated
+	default:
+		return ir.FieldLabelOptional
+	}
+}
+
+// trimComment trims whitespace from a comment string.
+func trimComment(s string) string {
+	return strings.TrimSpace(s)
 }
