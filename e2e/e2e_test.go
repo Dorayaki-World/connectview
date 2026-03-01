@@ -100,6 +100,96 @@ func TestE2E_GenerateHTML(t *testing.T) {
 	}
 }
 
+func TestE2E_CrossFileImport(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not found in PATH, skipping E2E test")
+	}
+
+	binaryPath := buildBinary(t)
+	tmpDir := t.TempDir()
+
+	protoDir := testdataDir()
+
+	// order.proto imports user.proto — pass both as files to generate
+	cmd := exec.Command("protoc",
+		"--plugin=protoc-gen-connectview="+binaryPath,
+		"--connectview_out="+tmpDir,
+		"-I", protoDir,
+		"order/v1/order.proto",
+		"user/v1/user.proto",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("protoc failed: %v\nOutput: %s", err, out)
+	}
+
+	content, err := os.ReadFile(filepath.Join(tmpDir, "index.html"))
+	if err != nil {
+		t.Fatalf("failed to read output: %v", err)
+	}
+	html := string(content)
+
+	checks := []string{
+		"OrderService",      // service from order.proto
+		"UserService",       // service from user.proto
+		"CreateOrder",       // RPC
+		"Order",             // message
+		"OrderItem",         // nested message from order.proto
+		"User",              // imported type from user.proto
+		"Address",           // nested type in user.proto
+	}
+	for _, c := range checks {
+		if !strings.Contains(html, c) {
+			t.Errorf("HTML should contain %q", c)
+		}
+	}
+}
+
+func TestE2E_CrossFileImportOnlyOneFile(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not found in PATH, skipping E2E test")
+	}
+
+	binaryPath := buildBinary(t)
+	tmpDir := t.TempDir()
+
+	protoDir := testdataDir()
+
+	// Only pass order.proto — user.proto is an import dependency, not in FileToGenerate
+	cmd := exec.Command("protoc",
+		"--plugin=protoc-gen-connectview="+binaryPath,
+		"--connectview_out="+tmpDir,
+		"-I", protoDir,
+		"order/v1/order.proto",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("protoc failed: %v\nOutput: %s", err, out)
+	}
+
+	content, err := os.ReadFile(filepath.Join(tmpDir, "index.html"))
+	if err != nil {
+		t.Fatalf("failed to read output: %v", err)
+	}
+	html := string(content)
+
+	checks := []string{
+		"OrderService",      // service from order.proto
+		"CreateOrder",       // RPC
+		"User",              // imported type from user.proto should be resolved
+	}
+	for _, c := range checks {
+		if !strings.Contains(html, c) {
+			t.Errorf("HTML should contain %q", c)
+		}
+	}
+
+	// UserService should NOT appear — it's in user.proto which is only an import dep
+	if strings.Contains(html, "UserService") {
+		t.Error("HTML should NOT contain UserService (user.proto was not in FileToGenerate)")
+	}
+}
+
 func TestE2E_GenerateMultipleProtos(t *testing.T) {
 	if _, err := exec.LookPath("protoc"); err != nil {
 		t.Skip("protoc not found in PATH, skipping E2E test")
