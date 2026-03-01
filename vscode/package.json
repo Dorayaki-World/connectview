@@ -1,0 +1,68 @@
+{
+  "name": "connectview",
+  "displayName": "ConnectView",
+  "description": "Preview ConnectRPC service definitions as interactive HTML documentation",
+  "version": "0.1.0",
+  "publisher": "dorayaki-world",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Visualization"],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "connectview.openPreview",
+        "title": "ConnectView: Open Preview",
+        "icon": "$(open-preview)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "when": "resourceLangId == proto3 || resourceLangId == proto || resourceExtname == .proto",
+          "command": "connectview.openPreview",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ConnectView",
+      "properties": {
+        "connectview.protocPath": {
+          "type": "string",
+          "default": "protoc",
+          "description": "Path to the protoc binary"
+        },
+        "connectview.pluginPath": {
+          "type": "string",
+          "default": "protoc-gen-connectview",
+          "description": "Path to the protoc-gen-connectview binary"
+        },
+        "connectview.protoRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Root directory containing .proto files (relative to workspace root). If empty, uses workspace root."
+        },
+        "connectview.includePaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Additional -I include paths for protoc"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.5.0"
+  }
+}
