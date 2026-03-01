@@ -8,6 +8,7 @@ Interactive API explorer for [ConnectRPC](https://connectrpc.com) services, gene
 - **Live serve mode** — hot reload on proto changes with built-in reverse proxy
 - **VS Code / Cursor extension** — preview proto definitions without leaving the editor
 - **Try-it panel** — send requests to your services directly from the browser
+- **Cross-file imports** — types referenced across proto files are resolved automatically
 - **Full proto3 support** — nested messages, enums, oneofs, maps, optional fields, recursive types
 
 ## Install
@@ -74,7 +75,12 @@ Or search for "ConnectView" in the extensions panel.
 | `connectview.protoRoot` | *(workspace root)* | Root directory containing `.proto` files |
 | `connectview.includePaths` | `[]` | Additional `-I` include paths for protoc |
 
-The extension auto-detects `buf` module cache (`.buf/`) as an include path. For other setups, use `includePaths`.
+The extension auto-detects include paths from:
+- Import statements in your proto files (scans workspace for matching files)
+- `buf` module cache (`.buf/`) and `buf.yaml` module roots
+- `proto_vendor/` directories
+
+For other setups, use `includePaths`.
 
 ## License
 
