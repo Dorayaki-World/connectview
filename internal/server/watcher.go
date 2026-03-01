@@ -48,6 +48,12 @@ func (w *Watcher) Run() {
 			if !ok {
 				return
 			}
+			// Watch newly created subdirectories so new packages are detected
+			if event.Op&fsnotify.Create != 0 {
+				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+					w.watcher.Add(event.Name)
+				}
+			}
 			if !strings.HasSuffix(event.Name, ".proto") {
 				continue
 			}

@@ -18,6 +18,18 @@ func NewProxy(targetURL string) *Proxy {
 	}
 }
 
+// hopByHopHeaders are headers that must not be forwarded by proxies (RFC 7230 Section 6.1).
+var hopByHopHeaders = map[string]bool{
+	"Connection":          true,
+	"Keep-Alive":          true,
+	"Proxy-Authenticate":  true,
+	"Proxy-Authorization": true,
+	"Te":                  true,
+	"Trailer":             true,
+	"Transfer-Encoding":   true,
+	"Upgrade":             true,
+}
+
 func (p *Proxy) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// CORS headers on all responses
@@ -43,10 +55,14 @@ func (p *Proxy) Handler() http.Handler {
 		}
 
 		for key, values := range r.Header {
+			if hopByHopHeaders[http.CanonicalHeaderKey(key)] {
+				continue
+			}
 			for _, v := range values {
 				proxyReq.Header.Add(key, v)
 			}
 		}
+		proxyReq.Host = "" // let http.Client derive Host from target URL
 
 		resp, err := p.client.Do(proxyReq)
 		if err != nil {
@@ -56,6 +72,9 @@ func (p *Proxy) Handler() http.Handler {
 		defer resp.Body.Close()
 
 		for key, values := range resp.Header {
+			if hopByHopHeaders[http.CanonicalHeaderKey(key)] {
+				continue
+			}
 			for _, v := range values {
 				w.Header().Add(key, v)
 			}
