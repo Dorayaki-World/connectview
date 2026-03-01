@@ -149,10 +149,10 @@ async function detectImportPaths(
   return { includes: [...externalIncludes], effectiveRoot };
 }
 
-/** Find all .proto files under a directory (including hidden/vendor dirs skipped by findProtoFiles). */
+/** Find all .proto files under a directory (searches vendor/third_party but skips dotdirs and node_modules). */
 async function findAllProtoFiles(dir: string): Promise<string[]> {
   const results: string[] = [];
-  const skip = new Set(["node_modules", ".git"]);
+  const skip = new Set(["node_modules"]);
 
   async function walk(current: string): Promise<void> {
     let entries;
@@ -163,7 +163,7 @@ async function findAllProtoFiles(dir: string): Promise<string[]> {
     }
     for (const entry of entries) {
       if (entry.isDirectory()) {
-        if (skip.has(entry.name)) continue;
+        if (entry.name.startsWith(".") || skip.has(entry.name)) continue;
         await walk(path.join(current, entry.name));
       } else if (entry.name.endsWith(".proto")) {
         results.push(path.relative(dir, path.join(current, entry.name)));
@@ -190,25 +190,60 @@ export async function compile(config: Config): Promise<CompileResult> {
   );
 
   try {
-    const autoIncludes = await detectIncludePaths(config);
+    let autoIncludes = await detectIncludePaths(config);
     const { includes: importIncludes, effectiveRoot } =
       await detectImportPaths(config, protoFiles, autoIncludes);
 
-    // If import detection found the real proto root is a subdirectory of
-    // the configured protoRoot, switch to it to avoid duplicate file errors.
+    // Determine the effective proto root. When the real proto root is a
+    // subdirectory of the configured protoRoot, we must switch to it so
+    // that file paths passed to protoc are consistent with -I paths.
+    // Otherwise protoc sees the same file through two paths and reports
+    // "already defined" errors.
     let protoRoot = config.protoRoot;
-    if (effectiveRoot) {
-      protoRoot = effectiveRoot;
+    let resolvedRoot = effectiveRoot;
+
+    // Also check if any autoInclude is a subdirectory of protoRoot that
+    // contains proto files — this means buf.yaml detection already found
+    // the real root before import detection could fire.
+    if (!resolvedRoot) {
+      for (const inc of autoIncludes) {
+        if (inc.startsWith(config.protoRoot + path.sep)) {
+          const subFiles = await findProtoFiles(inc);
+          if (subFiles.length > 0) {
+            resolvedRoot = inc;
+            break;
+          }
+        }
+      }
+    }
+
+    if (resolvedRoot) {
+      protoRoot = resolvedRoot;
       protoFiles = await findProtoFiles(protoRoot);
+      // Remove the resolved root from autoIncludes — it's now the protoRoot.
+      autoIncludes = autoIncludes.filter((p) => p !== resolvedRoot);
+    }
+
+    // Deduplicate include paths (order matters: protoRoot first).
+    const allIncludePaths = [
+      protoRoot,
+      ...autoIncludes,
+      ...importIncludes,
+      ...config.includePaths,
+    ];
+    const seenIncludes = new Set<string>();
+    const uniqueIncludes: string[] = [];
+    for (const p of allIncludePaths) {
+      if (!seenIncludes.has(p)) {
+        seenIncludes.add(p);
+        uniqueIncludes.push(p);
+      }
     }
 
     const args: string[] = [
       `--plugin=protoc-gen-connectview=${pluginPath}`,
       `--connectview_out=${tmpDir}`,
-      `-I${protoRoot}`,
-      ...autoIncludes.map((p) => `-I${p}`),
-      ...importIncludes.map((p) => `-I${p}`),
-      ...config.includePaths.map((p) => `-I${p}`),
+      ...uniqueIncludes.map((p) => `-I${p}`),
       ...protoFiles,
     ];
 
@@ -250,11 +285,8 @@ async function detectIncludePaths(config: Config): Promise<string[]> {
     // proto vendor dirs
     const protoVendor = path.join(root, "proto_vendor");
     if (await isDir(protoVendor)) candidates.add(protoVendor);
-    // buf.yaml indicates a buf module root — its directory is an include path
-    for (const name of ["buf.yaml", "buf.yml"]) {
-      const bufYaml = path.join(root, name);
-      if (await isFile(bufYaml)) candidates.add(root);
-    }
+    // buf.yaml indicates a buf module root — resolve its deps from cache
+    await addBufModuleIncludes(root, candidates);
   }
 
   // Also search one level of subdirectories for buf.yaml (e.g. proto/buf.yaml)
@@ -263,12 +295,7 @@ async function detectIncludePaths(config: Config): Promise<string[]> {
       const entries = await fs.promises.readdir(config.workspaceRoot, { withFileTypes: true });
       for (const entry of entries) {
         if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-        const subdir = path.join(config.workspaceRoot, entry.name);
-        for (const name of ["buf.yaml", "buf.yml"]) {
-          if (await isFile(path.join(subdir, name))) {
-            candidates.add(subdir);
-          }
-        }
+        await addBufModuleIncludes(path.join(config.workspaceRoot, entry.name), candidates);
       }
     } catch {
       // ignore read errors
@@ -276,6 +303,86 @@ async function detectIncludePaths(config: Config): Promise<string[]> {
   }
 
   return [...candidates];
+}
+
+/**
+ * If dir contains buf.yaml, add it as an include path and resolve
+ * its dependencies from the buf module cache (~/.cache/buf/).
+ */
+async function addBufModuleIncludes(dir: string, candidates: Set<string>): Promise<void> {
+  let found = false;
+  for (const name of ["buf.yaml", "buf.yml"]) {
+    if (await isFile(path.join(dir, name))) {
+      found = true;
+      break;
+    }
+  }
+  if (!found) return;
+
+  candidates.add(dir);
+
+  // Read buf.lock to find dependency module names.
+  const lockPath = path.join(dir, "buf.lock");
+  if (!await isFile(lockPath)) return;
+
+  let lockContent: string;
+  try {
+    lockContent = await fs.promises.readFile(lockPath, "utf-8");
+  } catch {
+    return;
+  }
+
+  const depNames: string[] = [];
+  const nameRe = /^\s+-\s+name:\s+(.+)$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = nameRe.exec(lockContent)) !== null) {
+    depNames.push(m[1].trim());
+  }
+  if (depNames.length === 0) return;
+
+  // Resolve each dep from the buf module cache.
+  const bufCacheBase = path.join(os.homedir(), ".cache", "buf", "v3", "modules");
+  if (!await isDir(bufCacheBase)) return;
+
+  for (const dep of depNames) {
+    // Cache structure: ~/.cache/buf/v3/modules/<digest_type>/<module_name>/<hash>/files/
+    // Try common digest types.
+    for (const digestType of ["b5", "b4", "b3"]) {
+      const moduleDir = path.join(bufCacheBase, digestType, dep);
+      if (!await isDir(moduleDir)) continue;
+
+      // Pick the most recently modified version.
+      let entries;
+      try {
+        entries = await fs.promises.readdir(moduleDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+
+      let latestDir = "";
+      let latestMtime = 0;
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        try {
+          const stat = await fs.promises.stat(path.join(moduleDir, entry.name));
+          if (stat.mtimeMs > latestMtime) {
+            latestMtime = stat.mtimeMs;
+            latestDir = entry.name;
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      if (latestDir) {
+        const filesDir = path.join(moduleDir, latestDir, "files");
+        if (await isDir(filesDir)) {
+          candidates.add(filesDir);
+        }
+      }
+      break; // Found the module in this digest type, stop trying others.
+    }
+  }
 }
 
 /**

@@ -77,7 +77,7 @@ Or search for "ConnectView" in the extensions panel.
 
 The extension auto-detects include paths from:
 - Import statements in your proto files (scans workspace for matching files)
-- `buf` module cache (`.buf/`) and `buf.yaml` module roots
+- `buf.yaml` / `buf.lock` — resolves dependencies from the buf module cache (`~/.cache/buf/`)
 - `proto_vendor/` directories
 
 For other setups, use `includePaths`.
