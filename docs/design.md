@@ -97,7 +97,7 @@ ConnectRPC は HTTP/JSON として使えるという強みを持ちながら、
 
 モード2: serve（ローカルサーバー）
   connectview serve --proto ./proto --target http://localhost:8080
-  → HTTPサーバーを起動（デフォルト :3000）
+  → HTTPサーバーを起動（デフォルト :9000）
   → /proxy/{Service}/{Method} でCORSを回避してリクエストを中継
   → protoファイルの変更を検知してスキーマをライブ更新
 ```
@@ -294,15 +294,16 @@ OUT-OF-SCOPE:
 │                                                             │
 │  connectview serve --proto ./proto --target http://localhost:8080
 │       ↓                                                     │
-│  HTTP Server (default :3000)                                │
+│  HTTP Server (default :9000)                                │
 │  ├── GET  /              → index.html (動的生成)             │
 │  ├── GET  /schema.json   → IR JSON                          │
+│  ├── GET  /events        → SSE (スキーマ更新通知)            │
 │  └── POST /proxy/{Svc}/{Method}                             │
 │              ↓ リクエスト中継                                │
 │         ConnectRPC Server                                   │
 │                                                             │
 │  FileWatcher → protoファイル変更検知 → スキーマ再生成         │
-│             → WebSocket / SSE でブラウザに通知               │
+│             → SSE でブラウザに通知                           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -310,7 +311,7 @@ OUT-OF-SCOPE:
 
 ```
 cmd/connectview/
-  main.go             エントリポイント。protogen.Options{}.Run() で起動
+  main.go             エントリポイント。generate / serve の2モード切替
 
 internal/parser/
   parser.go           protogen.Plugin → IR変換（コメント抽出・map検出・optional検出含む）
@@ -327,10 +328,13 @@ internal/renderer/assets/
   style.css           スタイルシート
   app.js              フォーム生成・リクエスト送信ロジック
 
-internal/server/         （serveモードで実装予定）
-  server.go           serveモードのHTTPサーバー
+internal/compiler/
+  compiler.go         protocompile で .proto ファイルを直接パース → protogen.Plugin → parser.Parse() で IR 生成
+
+internal/server/         （serveモード）
+  server.go           serveモードのHTTPサーバー（SSE 対応）
   proxy.go            /proxy エンドポイントの実装
-  watcher.go          protoファイルのFileWatcher
+  watcher.go          protoファイルのFileWatcher（fsnotify, 100ms debounce）
 ```
 
 ※ `internal/plugin/` と `internal/parser/comment.go` は不要。
@@ -897,24 +901,22 @@ async function sendServerStream(rpc, requestBody, headers, baseURL, onMessage) {
 ```go
 // internal/server/proxy.go
 
-// POST /proxy/{service}/{method}
-// Body: { "target": "http://...", "headers": {...}, "body": {...} }
-// → target の ConnectRPC サーバーへ中継
-// → レスポンスをそのままブラウザへ返却
-// → CORS ヘッダーを付与
+// Proxy は --target で指定されたConnectRPCサーバーへリクエストを中継する。
+// /proxy/ プレフィックスを除去し、そのままtargetへ転送する。
+// 全レスポンスに CORS ヘッダーを付与。
 
-func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
-    // CORS ヘッダー付与
-    w.Header().Set("Access-Control-Allow-Origin", "*")
-    w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Connect-Protocol-Version, Authorization")
-
-    // パスからサービス名・メソッド名を抽出
-    // /proxy/{service}/{method} → target/{service}/{method}
-
-    // リクエストボディを読み込み
-    // ターゲットサーバーへ中継
-    // レスポンスをそのまま返却
+type Proxy struct {
+    targetURL string
+    client    *http.Client
 }
+
+func NewProxy(targetURL string) *Proxy
+func (p *Proxy) Handler() http.Handler
+
+// POST /proxy/connectrpc.greet.v1.GreetService/Greet
+//   → http://target:port/connectrpc.greet.v1.GreetService/Greet
+// Content-Type, Authorization, Connect-Protocol-Version 等のヘッダーを中継
+// OPTIONS → 204 (CORS preflight)
 ```
 
 ---
