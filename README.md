@@ -59,13 +59,10 @@ Preview ConnectRPC service definitions inside the editor. The extension runs `pr
 
 ### Install
 
-```sh
-cd vscode
-npm install && npm run build
-npx @vscode/vsce package
-```
+- **VS Code**: [Marketplace](https://marketplace.visualstudio.com/items?itemName=dorayaki-world.connectview)
+- **Cursor**: [Open VSX](https://open-vsx.org/extension/dorayaki-world/connectview)
 
-Then in VS Code / Cursor: `Cmd+Shift+P` → "Extensions: Install from VSIX..." → select `connectview-0.1.0.vsix`.
+Or search for "ConnectView" in the extensions panel.
 
 ### Usage
 

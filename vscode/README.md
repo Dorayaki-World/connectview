@@ -1,11 +1,11 @@
 # ConnectView for VS Code / Cursor
 
-Preview ConnectRPC service definitions with a Swagger UI-like experience, right inside your editor.
+Preview [ConnectRPC](https://connectrpc.com) service definitions with a Swagger UI-like experience, right inside your editor.
 
 ## Prerequisites
 
-- `protoc` installed
-- `protoc-gen-connectview` installed
+- [`protoc`](https://github.com/protocolbuffers/protobuf/releases) installed
+- [`protoc-gen-connectview`](https://github.com/Dorayaki-World/connectview) installed
 
 ```bash
 # protoc (Homebrew)
@@ -29,7 +29,7 @@ You can also click the preview icon in the editor title bar when a `.proto` file
 |---------|---------|-------------|
 | `connectview.protocPath` | `protoc` | Path to the protoc binary |
 | `connectview.pluginPath` | `protoc-gen-connectview` | Path to the plugin binary |
-| `connectview.protoRoot` | (workspace root) | Root directory containing `.proto` files |
+| `connectview.protoRoot` | *(workspace root)* | Root directory containing `.proto` files |
 | `connectview.includePaths` | `[]` | Additional `-I` include paths for protoc |
 
 Example (`.vscode/settings.json`):
@@ -41,27 +41,9 @@ Example (`.vscode/settings.json`):
 }
 ```
 
-## Development
+### buf projects
 
-```bash
-cd vscode
-npm install
-npm run build          # build once
-npm run watch          # rebuild on file changes
-```
-
-### Local install via VSIX
-
-```bash
-npx @vscode/vsce package
-# Cmd+Shift+P → "Extensions: Install from VSIX..." → select connectview-0.1.0.vsix
-```
-
-### Extension Development Host (F5 debugging)
-
-1. Open the `vscode/` folder in Cursor or VS Code
-2. Press F5 → select "Run Extension"
-3. In the new window, open the project root and run the command
+The extension auto-detects the buf module cache (`.buf/`) as an include path. No extra configuration is needed for projects using [buf](https://buf.build).
 
 ## Limitations (v0.1)
 
