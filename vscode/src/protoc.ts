@@ -64,15 +64,7 @@ export async function compile(config: Config): Promise<CompileResult> {
   );
 
   try {
-    // Auto-detect buf module cache (.buf/) as an include path for imports.
-    const autoIncludes: string[] = [];
-    const bufDir = path.join(config.protoRoot, ".buf");
-    try {
-      const st = await fs.promises.stat(bufDir);
-      if (st.isDirectory()) autoIncludes.push(bufDir);
-    } catch {
-      // no .buf dir, skip
-    }
+    const autoIncludes = await detectIncludePaths(config);
 
     const args: string[] = [
       `--plugin=protoc-gen-connectview=${pluginPath}`,
@@ -97,6 +89,37 @@ export async function compile(config: Config): Promise<CompileResult> {
     return { ok: true, html };
   } finally {
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Auto-detect include paths for protoc by looking for common dependency
+ * directories (buf module cache, proto vendor dirs) at the workspace root
+ * and proto root.
+ */
+async function detectIncludePaths(config: Config): Promise<string[]> {
+  const candidates = new Set<string>();
+
+  // Check both workspace root and proto root for dependency dirs.
+  const roots = [config.workspaceRoot, config.protoRoot];
+  for (const root of roots) {
+    if (!root) continue;
+    // buf module cache (.buf/)
+    const bufDir = path.join(root, ".buf");
+    if (await isDir(bufDir)) candidates.add(bufDir);
+    // proto vendor dirs
+    const protoVendor = path.join(root, "proto_vendor");
+    if (await isDir(protoVendor)) candidates.add(protoVendor);
+  }
+
+  return [...candidates];
+}
+
+async function isDir(p: string): Promise<boolean> {
+  try {
+    return (await fs.promises.stat(p)).isDirectory();
+  } catch {
+    return false;
   }
 }
 

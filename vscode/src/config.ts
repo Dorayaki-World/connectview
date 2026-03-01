@@ -5,6 +5,7 @@ export interface Config {
   protocPath: string;
   pluginPath: string;
   protoRoot: string;
+  workspaceRoot: string;
   includePaths: string[];
 }
 
@@ -29,6 +30,7 @@ export function loadConfig(): Config {
     protocPath: cfg.get<string>("protocPath", "protoc"),
     pluginPath: cfg.get<string>("pluginPath", "protoc-gen-connectview"),
     protoRoot,
+    workspaceRoot: root,
     includePaths,
   };
 }

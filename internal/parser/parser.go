@@ -18,6 +18,17 @@ func Parse(plugin *protogen.Plugin) *ir.Root {
 	}
 
 	for _, f := range plugin.Files {
+		// Register messages and enums from ALL files (including imports)
+		// so that cross-file references (e.g. google.protobuf.Timestamp)
+		// can be resolved.
+		for _, enum := range f.Enums {
+			e := parseEnum(enum)
+			root.Enums[e.FullName] = e
+		}
+		for _, msg := range f.Messages {
+			parseMessageRecursive(msg, root)
+		}
+
 		if !f.Generate {
 			continue
 		}
@@ -28,18 +39,7 @@ func Parse(plugin *protogen.Plugin) *ir.Root {
 		}
 		root.Files = append(root.Files, file)
 
-		// Parse top-level enums.
-		for _, enum := range f.Enums {
-			e := parseEnum(enum)
-			root.Enums[e.FullName] = e
-		}
-
-		// Parse top-level messages.
-		for _, msg := range f.Messages {
-			parseMessageRecursive(msg, root)
-		}
-
-		// Parse services.
+		// Parse services (only from files marked for generation).
 		for _, svc := range f.Services {
 			s := parseService(svc, f)
 			root.Services = append(root.Services, s)
