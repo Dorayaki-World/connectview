@@ -48,6 +48,11 @@ func (r *Resolver) resolveMessageRef(ref *ir.MessageRef, visitedInPath map[strin
 	}
 
 	for _, field := range msg.Fields {
+		// Skip map fields — their TypeName points to a synthetic MapEntry
+		// that is not registered in root.Messages.
+		if field.IsMap {
+			continue
+		}
 		if field.Type == ir.FieldTypeMessage {
 			if visitedInPath[field.TypeName] {
 				// This FQN already exists on the current path -> recursive reference

@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package mutual.v1;
+
+option go_package = "mutual/v1;mutualv1";
+
+service MutualService {
+  rpc Get(GetRequest) returns (GetResponse) {}
+}
+
+message GetRequest {
+  NodeA a = 1;
+}
+
+message GetResponse {
+  NodeA result = 1;
+}
+
+// NodeA and NodeB are mutually recursive.
+message NodeA {
+  string value = 1;
+  NodeB b = 2;
+}
+
+message NodeB {
+  string value = 1;
+  NodeA a = 2;  // mutually recursive with NodeA
+}

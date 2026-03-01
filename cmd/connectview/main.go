@@ -27,7 +27,9 @@ func main() {
 			return nil, err
 		}
 
+		features := uint64(pluginpb.CodeGeneratorResponse_FEATURE_PROTO3_OPTIONAL)
 		return &pluginpb.CodeGeneratorResponse{
+			SupportedFeatures: &features,
 			File: []*pluginpb.CodeGeneratorResponse_File{
 				{
 					Name:    proto.String("index.html"),

@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package tree.v1;
+
+option go_package = "tree/v1;treev1";
+
+service TreeService {
+  rpc GetTree(GetTreeRequest) returns (GetTreeResponse) {}
+}
+
+message GetTreeRequest {
+  string root_id = 1;
+}
+
+message GetTreeResponse {
+  TreeNode root = 1;
+}
+
+// TreeNode is a node in a tree structure.
+// children is a recursive reference to TreeNode.
+message TreeNode {
+  string id = 1;
+  string label = 2;
+  // Direct children of this node.
+  repeated TreeNode children = 3;
+  // Parent node. Optional.
+  optional TreeNode parent = 4;
+}

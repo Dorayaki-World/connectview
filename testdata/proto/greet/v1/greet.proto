@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package connectrpc.greet.v1;
+
+option go_package = "connectrpc/greet/v1;greetv1";
+
+// GreetService provides greeting functionality.
+service GreetService {
+  // Greet sends a greeting to the named subject.
+  rpc Greet(GreetRequest) returns (GreetResponse) {}
+
+  // GreetNoResponse is a one-way RPC with no side effects.
+  rpc GreetNoResponse(GreetRequest) returns (GreetResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+// GreetRequest contains the subject to greet.
+message GreetRequest {
+  // The subject to greet.
+  string name = 1;
+  // The locale for the greeting. Optional.
+  optional string locale = 2;
+}
+
+// GreetResponse contains the greeting message.
+message GreetResponse {
+  // The greeting.
+  string greeting = 1;
+}
