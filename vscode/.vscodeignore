@@ -3,3 +3,6 @@ node_modules/
 tsconfig.json
 esbuild.js
 .gitignore
+.vscode/
+images/icon.svg
+*.vsix

@@ -5,6 +5,16 @@
   "version": "0.1.0",
   "publisher": "dorayaki-world",
   "license": "MIT",
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Dorayaki-World/connectview"
+  },
+  "homepage": "https://github.com/Dorayaki-World/connectview#vs-code--cursor-extension",
+  "bugs": {
+    "url": "https://github.com/Dorayaki-World/connectview/issues"
+  },
+  "keywords": ["protobuf", "connectrpc", "grpc", "proto", "api", "preview"],
   "engines": {
     "vscode": "^1.85.0"
   },
